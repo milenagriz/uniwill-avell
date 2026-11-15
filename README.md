@@ -20,6 +20,7 @@ next to the power key cycles it. Planned: daemon-driven fan curves, battery care
 | `driver/patches/0003` | Upstreamable: the Avell DMI entry and Max fan |
 | `driver/patches/0004` | Upstreamable: TGP offset for this board (clamp to 20 W, forwarded to the graphics driver through the firmware's `T1WR`) |
 | `driver/patches/0005` | Upstreamable: Power profile through platform_profile, cycled by the performance button |
+| `driver/patches/0006` | **Local-only:** direct fan speed through the universal fan tables, with the kernel watchdog (ADR-0001, ADR-0003) |
 | `driver/dkms.conf` | DKMS package `uniwill-avell/7.2.15.1` |
 | `driver/checks/` | On-device check scripts. Each one writes to the EC and ends by restoring automatic behaviour |
 | `daemon/` | `avelld` and `avellctl` (Rust) |
@@ -35,15 +36,15 @@ next to the power key cycles it. Planned: daemon-driven fan curves, battery care
 
 ## The fan interface
 
-The driver adds a standard hwmon `pwmN_enable` file, backed by the EC's own Max fan bit:
+The driver adds a standard hwmon `pwmN_enable` file (shared by both fans):
 
 | `pwmN_enable` | Meaning |
 |---|---|
 | `0` | Max fan |
-| `1` | Manual. Starts at full speed straight away; only `pwmN = 255` is accepted for now |
+| `1` | Manual. Starts at Max fan; then each fan takes any `pwmN` from 0 to 255. Duties too low to spin a fan are rounded. If nothing writes a duty for `fan_watchdog_sec` (default 5 s), the driver returns to `2`. Above `fan_hard_temp_cpu`/`fan_hard_temp_gpu` it forces Max fan |
 | `2` | Automatic (the firmware's own fan curve). This is the default after the driver loads |
 
-Both fans share one EC bit, so changing `pwm1_enable` also changes `pwm2_enable`. The mode read always follows
+The EC moves the fans towards a manual duty slowly (about 1% per second); full speed always goes through Max fan, so it is instant. The mode read always follows
 the EC: if the firmware or a hotkey turns Max fan off, the mode reads `2`, never `1`.
 
 To get clangd working in an editor, generate `driver/src/compile_commands.json` with
@@ -53,7 +54,8 @@ To get clangd working in an editor, generate `driver/src/compile_commands.json` 
 
 ```bash
 scripts/install.sh          # copies driver/ to /usr/src, installs with DKMS, loads it at boot, swaps the running module
-driver/checks/fans.sh       # about 10 s of Max fan, then back to automatic
+driver/checks/fans.sh       # the fan mode contract and the Cooling widget's Max button, ends on automatic
+driver/checks/direct-fan.sh # manual duties, Max fan override and the watchdog (about 1.5 min)
 ```
 
 Requires `dkms` and the headers for the running kernel (`linux-omarchy-headers`).

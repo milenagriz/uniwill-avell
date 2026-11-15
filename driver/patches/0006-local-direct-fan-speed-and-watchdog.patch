@@ -1,0 +1,547 @@
+--- a/drivers/platform/x86/uniwill/uniwill-acpi.c
++++ b/drivers/platform/x86/uniwill/uniwill-acpi.c
+@@ -374,6 +374,8 @@
+ /* The firmware forwards the cTGP offset to the NVIDIA platform device through T1WR */
+ #define UNIWILL_FEATURE_NVIDIA_CTGP_T1WR	BIT(16)
+ #define UNIWILL_FEATURE_POWER_PROFILE		BIT(17)
++/* Local-only: any fan duty through the universal fan tables, under a watchdog */
++#define UNIWILL_FEATURE_DIRECT_FAN		BIT(18)
+ 
+ enum usb_c_power_priority_options {
+ 	USB_C_POWER_PRIORITY_CHARGING = 0,
+@@ -406,6 +408,12 @@
+ 	struct device *ppdev;
+ 	u8 power_profile_initial;
+ 	u8 power_profile_bits;
++	struct delayed_work fan_watchdog;
++	unsigned long fan_last_write;
++	u8 fan_duty[2];
++	bool fan_hot;
++	bool fan_forced;	/* Max fan set by the driver while in manual mode */
++	bool fan_duty_written;
+ 	struct mutex super_key_lock;	/* Protects the toggling of the super key lock state */
+ 	struct list_head batteries;
+ 	struct mutex led_lock;		/* Protects writes to the lightbar registers */
+@@ -607,9 +615,20 @@
+ 	.val_format_endian_default = REGMAP_ENDIAN_LITTLE,
+ };
+ 
++static bool uniwill_is_fan_table_reg(unsigned int reg)
++{
++	return reg >= EC_ADDR_CPU_TEMP_END_TABLE &&
++	       reg < EC_ADDR_GPU_FAN_SPEED_TABLE + FAN_TABLE_LENGTH;
++}
++
+ static bool uniwill_writeable_reg(struct device *dev, unsigned int reg)
+ {
++	if (uniwill_is_fan_table_reg(reg))
++		return true;
++
+ 	switch (reg) {
++	case EC_ADDR_UNIVERSAL_FAN_CTRL:
++	case EC_ADDR_AP_OEM_6:
+ 	case EC_ADDR_OEM_9:
+ 	case EC_ADDR_AP_OEM:
+ 	case EC_ADDR_LIGHTBAR_AC_CTRL:
+@@ -643,7 +662,12 @@
+ 
+ static bool uniwill_readable_reg(struct device *dev, unsigned int reg)
+ {
++	if (uniwill_is_fan_table_reg(reg))
++		return true;
++
+ 	switch (reg) {
++	case EC_ADDR_UNIVERSAL_FAN_CTRL:
++	case EC_ADDR_AP_OEM_6:
+ 	case EC_ADDR_CPU_TEMP:
+ 	case EC_ADDR_GPU_TEMP:
+ 	case EC_ADDR_MAIN_FAN_RPM_1:
+@@ -690,7 +714,13 @@
+ 
+ static bool uniwill_volatile_reg(struct device *dev, unsigned int reg)
+ {
++	/* Never let regcache_sync() put the fans back into manual mode */
++	if (uniwill_is_fan_table_reg(reg))
++		return true;
++
+ 	switch (reg) {
++	case EC_ADDR_UNIVERSAL_FAN_CTRL:
++	case EC_ADDR_AP_OEM_6:
+ 	case EC_ADDR_CPU_TEMP:
+ 	case EC_ADDR_GPU_TEMP:
+ 	case EC_ADDR_MAIN_FAN_RPM_1:
+@@ -1487,6 +1517,374 @@
+ 	return 0;
+ }
+ 
++
++/*
++ * Direct fan speed (local-only): with the "universal fan control" EC feature,
++ * a custom fan table can be loaded with a single zone covering every reachable
++ * temperature, so the zone's speed becomes the fan's duty (0 - PWM_MAX). The
++ * dummy zones above it run the fans at full speed, so the firmware itself
++ * still forces full speed if the temperature gets that high. Clearing
++ * ENABLE_UNIVERSAL_FAN_CTRL hands the fans back to the firmware's own curve.
++ *
++ * The EC slews the fans towards the table's duty slowly (observed: about 1%
++ * of full speed per second), so whenever full speed is needed at once the
++ * driver turns on Max fan (FAN_MODE_BOOST) on top of the table: when manual
++ * mode is entered, until the first duty is written, and above the hard
++ * temperatures, and whenever both fans are asked for full speed (so a Max
++ * button that writes manual + 255 still gets Max fan at once). While the
++ * driver itself holds Max fan the mode reads manual.
++ *
++ * A dead controller must not leave the fans slow: while in manual mode a work
++ * item checks every second that a duty was written within fan_watchdog_sec,
++ * otherwise it returns to automatic, and it forces Max fan above the hard
++ * temperatures until they have dropped by UNIWILL_FAN_HARD_HYST.
++ */
++static unsigned int fan_watchdog_sec = 5;
++module_param(fan_watchdog_sec, uint, 0644);
++MODULE_PARM_DESC(fan_watchdog_sec, "Seconds without a pwm write before manual fan control falls back to automatic (1-60, default 5)");
++
++static unsigned int fan_hard_temp_cpu = 95;
++module_param(fan_hard_temp_cpu, uint, 0644);
++MODULE_PARM_DESC(fan_hard_temp_cpu, "CPU temperature in degrees C that forces full fan speed in manual mode (default 95)");
++
++static unsigned int fan_hard_temp_gpu = 87;
++module_param(fan_hard_temp_gpu, uint, 0644);
++MODULE_PARM_DESC(fan_hard_temp_gpu, "GPU temperature in degrees C that forces full fan speed in manual mode (default 87)");
++
++#define UNIWILL_FAN_HARD_HYST		5
++#define UNIWILL_FAN_ZONE_END_CPU	115
++#define UNIWILL_FAN_ZONE_END_GPU	120
++/*
++ * Lowest duty (of PWM_MAX) at which both fans start from standstill and keep
++ * spinning (observed on the Avell A52 MOB: pwm 8/255 stalls, 16/255 runs at
++ * about 400 RPM)
++ */
++#define UNIWILL_FAN_MIN_DUTY		13
++#define UNIWILL_FAN_POLL		HZ
++
++static const unsigned int uniwill_fan_speed_table[] = {
++	EC_ADDR_CPU_FAN_SPEED_TABLE,
++	EC_ADDR_GPU_FAN_SPEED_TABLE,
++};
++
++
++static int uniwill_fan_tables_enable(struct uniwill_data *data, bool enable)
++{
++	int ret;
++
++	if (!enable) {
++		ret = regmap_clear_bits(data->regmap, EC_ADDR_AP_OEM_6, ENABLE_UNIVERSAL_FAN_CTRL);
++		if (ret < 0)
++			return ret;
++
++		return regmap_clear_bits(data->regmap, EC_ADDR_UNIVERSAL_FAN_CTRL, SPLIT_TABLES);
++	}
++
++	ret = regmap_set_bits(data->regmap, EC_ADDR_UNIVERSAL_FAN_CTRL, SPLIT_TABLES);
++	if (ret < 0)
++		return ret;
++
++	/* Zone 0 covers every reachable temperature; its speed is the duty */
++	ret = regmap_write(data->regmap, EC_ADDR_CPU_TEMP_START_TABLE, 0);
++	if (ret < 0)
++		return ret;
++	ret = regmap_write(data->regmap, EC_ADDR_CPU_TEMP_END_TABLE, UNIWILL_FAN_ZONE_END_CPU);
++	if (ret < 0)
++		return ret;
++	ret = regmap_write(data->regmap, EC_ADDR_GPU_TEMP_START_TABLE, 0);
++	if (ret < 0)
++		return ret;
++	ret = regmap_write(data->regmap, EC_ADDR_GPU_TEMP_END_TABLE, UNIWILL_FAN_ZONE_END_GPU);
++	if (ret < 0)
++		return ret;
++
++	/* Unreachable dummy zones above it, all at full speed */
++	for (int i = 1; i < FAN_TABLE_LENGTH; i++) {
++		ret = regmap_write(data->regmap, EC_ADDR_CPU_TEMP_START_TABLE + i,
++				   UNIWILL_FAN_ZONE_END_CPU + i);
++		if (ret < 0)
++			return ret;
++		ret = regmap_write(data->regmap, EC_ADDR_CPU_TEMP_END_TABLE + i,
++				   UNIWILL_FAN_ZONE_END_CPU + i + 1);
++		if (ret < 0)
++			return ret;
++		ret = regmap_write(data->regmap, EC_ADDR_CPU_FAN_SPEED_TABLE + i, PWM_MAX);
++		if (ret < 0)
++			return ret;
++		ret = regmap_write(data->regmap, EC_ADDR_GPU_TEMP_START_TABLE + i,
++				   UNIWILL_FAN_ZONE_END_GPU + i);
++		if (ret < 0)
++			return ret;
++		ret = regmap_write(data->regmap, EC_ADDR_GPU_TEMP_END_TABLE + i,
++				   UNIWILL_FAN_ZONE_END_GPU + i + 1);
++		if (ret < 0)
++			return ret;
++		ret = regmap_write(data->regmap, EC_ADDR_GPU_FAN_SPEED_TABLE + i, PWM_MAX);
++		if (ret < 0)
++			return ret;
++	}
++
++	return regmap_set_bits(data->regmap, EC_ADDR_AP_OEM_6, ENABLE_UNIVERSAL_FAN_CTRL);
++}
++
++static int uniwill_fan_write_duty(struct uniwill_data *data, int channel, unsigned int duty)
++{
++	/*
++	 * A duty of 0 makes the EC spin the fan up to 30% for minutes before
++	 * stopping it; 1 stops the fan straight away (TUXEDO's observation).
++	 */
++	return regmap_write(data->regmap, uniwill_fan_speed_table[channel], duty ?: 1);
++}
++
++static int uniwill_fan_apply(struct uniwill_data *data)
++{
++	int ret;
++
++	for (int i = 0; i < ARRAY_SIZE(uniwill_fan_speed_table); i++) {
++		ret = uniwill_fan_write_duty(data, i, data->fan_duty[i]);
++		if (ret < 0)
++			return ret;
++	}
++
++	return 0;
++}
++
++/* Caller holds fan_boost_lock: Max fan on top of the table, or back to the table */
++static int uniwill_fan_force(struct uniwill_data *data, bool force)
++{
++	int ret;
++
++	if (force == data->fan_forced)
++		return 0;
++
++	ret = uniwill_set_fan_boost(data, force);
++	if (ret < 0)
++		return ret;
++
++	data->fan_forced = force;
++
++	return 0;
++}
++
++/*
++ * Caller holds fan_boost_lock. The table cannot reach full speed quickly, so
++ * Max fan stands in for it: before the first duty, while too hot, and when
++ * both fans are asked for full speed.
++ */
++static int uniwill_fan_update_force(struct uniwill_data *data)
++{
++	return uniwill_fan_force(data, data->fan_hot || !data->fan_duty_written ||
++				 (data->fan_duty[0] == PWM_MAX && data->fan_duty[1] == PWM_MAX));
++}
++
++/* Caller holds fan_boost_lock */
++static int uniwill_fan_enter_manual(struct uniwill_data *data)
++{
++	int ret;
++
++	/* Full speed at once, and until the first duty is written */
++	ret = uniwill_set_fan_boost(data, true);
++	if (ret < 0)
++		return ret;
++
++	data->fan_forced = true;
++	data->fan_duty_written = false;
++	data->fan_duty[0] = PWM_MAX;
++	data->fan_duty[1] = PWM_MAX;
++	data->fan_hot = false;
++
++	ret = uniwill_fan_tables_enable(data, true);
++	if (ret < 0)
++		return ret;
++
++	ret = uniwill_fan_apply(data);
++	if (ret < 0)
++		return ret;
++
++	data->pwm_mode = UNIWILL_PWM_MODE_MANUAL;
++	data->fan_last_write = jiffies;
++	mod_delayed_work(system_dfl_wq, &data->fan_watchdog, UNIWILL_FAN_POLL);
++
++	return 0;
++}
++
++/* Caller holds fan_boost_lock */
++static int uniwill_fan_leave_manual(struct uniwill_data *data)
++{
++	if (data->pwm_mode != UNIWILL_PWM_MODE_MANUAL)
++		return 0;
++
++	int ret;
++
++	/* The watchdog stops rescheduling itself once the mode is not manual */
++	data->pwm_mode = UNIWILL_PWM_MODE_AUTO;
++
++	if (data->fan_forced) {
++		data->fan_forced = false;
++		ret = uniwill_set_fan_boost(data, false);
++		if (ret < 0)
++			return ret;
++	}
++
++	return uniwill_fan_tables_enable(data, false);
++}
++
++static unsigned int uniwill_fan_round_duty(long val)
++{
++	unsigned int duty = DIV_ROUND_CLOSEST(clamp_val(val, 0, U8_MAX) * PWM_MAX, U8_MAX);
++
++	/* Never leave a fan stalled between off and its lowest spinning duty */
++	if (duty < UNIWILL_FAN_MIN_DUTY / 2)
++		return 0;
++	if (duty < UNIWILL_FAN_MIN_DUTY)
++		return UNIWILL_FAN_MIN_DUTY;
++
++	return duty;
++}
++
++static void uniwill_fan_watchdog_work(struct work_struct *work)
++{
++	struct uniwill_data *data = container_of(to_delayed_work(work), struct uniwill_data,
++						 fan_watchdog);
++	unsigned int timeout = clamp_val(fan_watchdog_sec, 1, 60) * HZ;
++	unsigned int cpu, gpu;
++	bool hot;
++
++	guard(mutex)(&data->fan_boost_lock);
++
++	if (data->pwm_mode != UNIWILL_PWM_MODE_MANUAL)
++		return;
++
++	if (time_after(jiffies, data->fan_last_write + timeout)) {
++		dev_warn(data->dev, "no fan duty written for %u s, returning to automatic\n",
++			 timeout / HZ);
++		uniwill_fan_leave_manual(data);
++		return;
++	}
++
++	if (regmap_read(data->regmap, EC_ADDR_CPU_TEMP, &cpu) < 0 ||
++	    regmap_read(data->regmap, EC_ADDR_GPU_TEMP, &gpu) < 0) {
++		/* Cannot see the temperatures: do not stay in control */
++		uniwill_fan_leave_manual(data);
++		return;
++	}
++
++	if (data->fan_hot)
++		hot = cpu + UNIWILL_FAN_HARD_HYST >= fan_hard_temp_cpu ||
++		      gpu + UNIWILL_FAN_HARD_HYST >= fan_hard_temp_gpu;
++	else
++		hot = cpu >= fan_hard_temp_cpu || gpu >= fan_hard_temp_gpu;
++
++	if (hot != data->fan_hot) {
++		data->fan_hot = hot;
++		if (hot)
++			dev_warn(data->dev, "CPU %u C / GPU %u C: forcing Max fan\n", cpu, gpu);
++
++		if (uniwill_fan_update_force(data) < 0) {
++			uniwill_fan_leave_manual(data);
++			return;
++		}
++	}
++
++	queue_delayed_work(system_dfl_wq, &data->fan_watchdog, UNIWILL_FAN_POLL);
++}
++
++static void uniwill_fan_stop(void *context)
++{
++	struct uniwill_data *data = context;
++
++	scoped_guard(mutex, &data->fan_boost_lock)
++		uniwill_fan_leave_manual(data);
++
++	cancel_delayed_work_sync(&data->fan_watchdog);
++	uniwill_fan_tables_enable(data, false);
++}
++
++/* Caller holds fan_boost_lock */
++static int uniwill_write_direct_fan(struct uniwill_data *data, u32 attr, int channel, long val)
++{
++	int ret;
++
++	switch (attr) {
++	case hwmon_pwm_enable:
++		switch (val) {
++		case UNIWILL_PWM_MODE_FULL:
++			ret = uniwill_fan_leave_manual(data);
++			if (ret < 0)
++				return ret;
++
++			data->pwm_mode = UNIWILL_PWM_MODE_FULL;
++			return uniwill_set_fan_boost(data, true);
++		case UNIWILL_PWM_MODE_MANUAL:
++			if (data->pwm_mode == UNIWILL_PWM_MODE_MANUAL) {
++				data->fan_last_write = jiffies;
++				return 0;
++			}
++
++			return uniwill_fan_enter_manual(data);
++		case UNIWILL_PWM_MODE_AUTO:
++			ret = uniwill_fan_leave_manual(data);
++			if (ret < 0)
++				return ret;
++
++			data->pwm_mode = UNIWILL_PWM_MODE_AUTO;
++			return uniwill_set_fan_boost(data, false);
++		default:
++			return -EINVAL;
++		}
++	case hwmon_pwm_input:
++		if (data->pwm_mode != UNIWILL_PWM_MODE_MANUAL)
++			return -EBUSY;
++
++		data->fan_duty[channel] = uniwill_fan_round_duty(val);
++		data->fan_last_write = jiffies;
++
++		ret = uniwill_fan_write_duty(data, channel, data->fan_duty[channel]);
++		if (ret < 0)
++			return ret;
++
++		data->fan_duty_written = true;
++
++		return uniwill_fan_update_force(data);
++	default:
++		return -EOPNOTSUPP;
++	}
++}
++
++/* Caller holds fan_boost_lock and has refreshed data->fan_boost from the EC */
++static int uniwill_read_direct_fan_mode(struct uniwill_data *data, long *val)
++{
++	unsigned int value;
++	int ret;
++
++	if (data->pwm_mode == UNIWILL_PWM_MODE_MANUAL && data->fan_forced && !data->fan_boost)
++		/* Our Max fan was turned off behind our back: the table is in charge */
++		data->fan_forced = false;
++
++	if (data->fan_boost && !(data->pwm_mode == UNIWILL_PWM_MODE_MANUAL && data->fan_forced)) {
++		/* Max fan was turned on by someone else, e.g. a hotkey */
++		ret = uniwill_fan_leave_manual(data);
++		if (ret < 0)
++			return ret;
++
++		data->pwm_mode = UNIWILL_PWM_MODE_FULL;
++	} else {
++		ret = regmap_read(data->regmap, EC_ADDR_AP_OEM_6, &value);
++		if (ret < 0)
++			return ret;
++
++		if (!(value & ENABLE_UNIVERSAL_FAN_CTRL))
++			data->pwm_mode = UNIWILL_PWM_MODE_AUTO;
++		else if (data->pwm_mode != UNIWILL_PWM_MODE_MANUAL)
++			/* Tables on, but not by us: report the real state */
++			data->pwm_mode = UNIWILL_PWM_MODE_MANUAL;
++	}
++
++	*val = data->pwm_mode;
++
++	return 0;
++}
++
+ static int uniwill_write(struct device *dev, enum hwmon_sensor_types type, u32 attr, int channel,
+ 			 long val)
+ {
+@@ -1497,6 +1895,9 @@
+ 
+ 	guard(mutex)(&data->fan_boost_lock);
+ 
++	if (uniwill_device_supports(data, UNIWILL_FEATURE_DIRECT_FAN))
++		return uniwill_write_direct_fan(data, attr, channel, val);
++
+ 	switch (attr) {
+ 	case hwmon_pwm_enable:
+ 		switch (val) {
+@@ -1542,6 +1943,9 @@
+ 
+ 		/* The EC is the source of truth, e.g. a hotkey may have toggled boost */
+ 		data->fan_boost = !!(value & FAN_MODE_BOOST);
++		if (uniwill_device_supports(data, UNIWILL_FEATURE_DIRECT_FAN))
++			return uniwill_read_direct_fan_mode(data, val);
++
+ 		if (!data->fan_boost)
+ 			data->pwm_mode = UNIWILL_PWM_MODE_AUTO;
+ 		else if (data->pwm_mode != UNIWILL_PWM_MODE_MANUAL)
+@@ -1682,6 +2086,18 @@
+ 			return ret;
+ 	}
+ 
++	if (uniwill_device_supports(data, UNIWILL_FEATURE_DIRECT_FAN)) {
++		INIT_DELAYED_WORK(&data->fan_watchdog, uniwill_fan_watchdog_work);
++
++		ret = uniwill_fan_tables_enable(data, false);
++		if (ret < 0)
++			return ret;
++
++		ret = devm_add_action_or_reset(data->dev, uniwill_fan_stop, data);
++		if (ret < 0)
++			return ret;
++	}
++
+ 	hdev = devm_hwmon_device_register_with_info(data->dev, "uniwill", data,
+ 						    &uniwill_chip_info, NULL);
+ 
+@@ -2709,6 +3125,9 @@
+ {
+ 	struct uniwill_data *data = platform_get_drvdata(pdev);
+ 
++	if (uniwill_device_supports(data, UNIWILL_FEATURE_DIRECT_FAN))
++		uniwill_fan_stop(data);
++
+ 	if (uniwill_device_supports(data, UNIWILL_FEATURE_FAN_BOOST))
+ 		regmap_clear_bits(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, FAN_MODE_BOOST);
+ 
+@@ -2834,11 +3253,34 @@
+ 	return 0;
+ }
+ 
++static int uniwill_suspend_direct_fan(struct uniwill_data *data)
++{
++	int ret;
++
++	if (!uniwill_device_supports(data, UNIWILL_FEATURE_DIRECT_FAN))
++		return 0;
++
++	/* Nobody updates the duty while suspended: hand the fans back to the firmware */
++	scoped_guard(mutex, &data->fan_boost_lock) {
++		ret = uniwill_fan_leave_manual(data);
++		if (ret < 0)
++			return ret;
++	}
++
++	cancel_delayed_work_sync(&data->fan_watchdog);
++
++	return 0;
++}
++
+ static int uniwill_suspend(struct device *dev)
+ {
+ 	struct uniwill_data *data = dev_get_drvdata(dev);
+ 	int ret;
+ 
++	ret = uniwill_suspend_direct_fan(data);
++	if (ret < 0)
++		return ret;
++
+ 	ret = uniwill_suspend_fn_lock(data);
+ 	if (ret < 0)
+ 		return ret;
+@@ -3266,7 +3708,8 @@
+ 		    UNIWILL_FEATURE_FAN_BOOST |
+ 		    UNIWILL_FEATURE_NVIDIA_CTGP_CONTROL |
+ 		    UNIWILL_FEATURE_NVIDIA_CTGP_T1WR |
+-		    UNIWILL_FEATURE_POWER_PROFILE,
++		    UNIWILL_FEATURE_POWER_PROFILE |
++		    UNIWILL_FEATURE_DIRECT_FAN,
+ 	/* The firmware power table for this GPU, panel and adapter allows +20 W */
+ 	.ctgp_offset_max = 20,
+ };
+@@ -3803,4 +4246,4 @@
+ MODULE_AUTHOR("Armin Wolf <W_Armin@gmx.de>");
+ MODULE_DESCRIPTION("Uniwill notebook driver");
+ MODULE_LICENSE("GPL");
+-MODULE_VERSION("7.2.15-avell4");
++MODULE_VERSION("7.2.15-avell5-local");

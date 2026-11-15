@@ -293,3 +293,42 @@ Each profile under a 20 s all-core load (`openssl speed`, after 20 s of settling
 `MSR_PKG_POWER_LIMIT` (`0x610`) stays `0x4283c000a183c0` (PL1 = PL2 = 120 W) in all three profiles, and the MMIO RAPL limits are 0.
 So the firmware caps quiet at about 11 W some other way, from the EC side; the mechanism is **unknown**. Module checked with REA
 `inspect_kernel_module` (Evidence `ev_a0937c09e466aac5a8ef5082fcc97ef7bb332c779a50a9cb5e45de7de92d8d45`: version 7.2.15-avell4, signature present).
+
+## 11. Direct fan speed and the kernel watchdog (#6)
+
+Build `7.2.15-avell5-local`, **local-only** `patches/0006` on top of the upstreamable 0003-0005. The design is in ADR-0003:
+universal fan tables, plus Max fan whenever full speed is needed at once. Module checked with REA `inspect_kernel_module`
+(Evidence `ev_7d9d77995c5f103c10025393c7c208478000bf16ad2846c9d34c0514d1fee547`: version 7.2.15-avell5-local, signature present).
+
+Interface (hwmon, both fans): `pwmN_enable` 0 = Max fan, 1 = manual, 2 = automatic. In manual mode `pwmN` takes 0-255 per fan.
+Module parameters (0644): `fan_watchdog_sec` (default 5, clamped to 1-60), `fan_hard_temp_cpu` (default 95 °C), `fan_hard_temp_gpu`
+(default 87 °C); hysteresis 5 °C. A 1 s work item enforces both while in manual mode. Probe, unload, shutdown and suspend all turn the tables off.
+
+Observed on the device (`driver/checks/direct-fan.sh`, `--sweep`):
+
+| Behaviour | Result |
+|---|---|
+| Live state before the first write | `0x07C5` = `0x07C6` = 0, tables `0x0F00-0x0F5F` all 0 |
+| Fans follow the table | yes, but **slowly**: about +3/255 every 2 s up (81 → 117 in 20 s) and down, so a full swing takes about 2 minutes |
+| Enter manual (Max fan start) | 5445 / 5310 RPM within 3 s, mode reads 1 |
+| Fans independent | fan 1 at 255 rises while fan 2 at 0 falls |
+| Max fan over a low table duty (hard temp set to 30 °C) | back to about 5400 RPM within 6 s, mode still 1, kernel log "forcing Max fan" |
+| Max fan released at duty 0 | fans stop straight away (no slow ramp from Max fan down) |
+| Watchdog (no write for 5 s) | kernel log "no fan duty written for 5 s, returning to automatic", mode 2 |
+| rmmod in manual | `0x07C5` = `0x07C6` = 0, Max fan off |
+| s2idle suspend in manual | mode 2 after resume, tables off |
+| Cooling widget sequence, 3 cycles | Max fan instantly (about 5450 RPM), back to automatic |
+
+Minimum spinning duty, from standstill, 40 s per step (both fans):
+
+| pwm (of 255) | 8 | 16 | 24 | 32 | 40 | 48 | 64 |
+|---|---|---|---|---|---|---|---|
+| fan 1 / fan 2 RPM | 0 / 0 | 390 / 406 | 615 / 628 | 838 / 845 | 1055 / 1058 | 1302 / 1292 | 1703 / 1674 |
+
+So the minimum is set to 13 of the EC's 200 (16/255). Duties below half of that round to off (written as 1, which stops the fan at
+once; 0 would make the EC spin it at 30% for minutes, per TUXEDO). Anything else below the minimum rounds up to it. Checked through
+the table registers: 8 → 13, 3 → off, 5 → off, 12 → 13, 255 → 200.
+
+Hard temperatures (chosen, not measured limits): CPU 95 °C, the temperature the CPU reaches within seconds under all-core load (section 7.4),
+so a sane curve is at full there anyway; GPU 87 °C, the usual ceiling for this NVIDIA Laptop GPU class (inferred).
+The firmware also runs the table's dummy zones at full speed above 115 °C (CPU) and 120 °C (GPU).
