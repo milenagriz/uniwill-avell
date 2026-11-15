@@ -374,6 +374,8 @@
 /* The firmware forwards the cTGP offset to the NVIDIA platform device through T1WR */
 #define UNIWILL_FEATURE_NVIDIA_CTGP_T1WR	BIT(16)
 #define UNIWILL_FEATURE_POWER_PROFILE		BIT(17)
+/* The EC keeps the real battery cycle count (ACPI _BIX reports 0) */
+#define UNIWILL_FEATURE_BATTERY_CYCLE_COUNT	BIT(19)
 /* Local-only: any fan duty through the universal fan tables, under a watchdog */
 #define UNIWILL_FEATURE_DIRECT_FAN		BIT(18)
 
@@ -666,6 +668,8 @@ static bool uniwill_readable_reg(struct device *dev, unsigned int reg)
 		return true;
 
 	switch (reg) {
+	case EC_ADDR_BAT_CYCLE_COUNT_1:
+	case EC_ADDR_BAT_CYCLE_COUNT_2:
 	case EC_ADDR_UNIVERSAL_FAN_CTRL:
 	case EC_ADDR_AP_OEM_6:
 	case EC_ADDR_CPU_TEMP:
@@ -719,6 +723,8 @@ static bool uniwill_volatile_reg(struct device *dev, unsigned int reg)
 		return true;
 
 	switch (reg) {
+	case EC_ADDR_BAT_CYCLE_COUNT_1:
+	case EC_ADDR_BAT_CYCLE_COUNT_2:
 	case EC_ADDR_UNIVERSAL_FAN_CTRL:
 	case EC_ADDR_AP_OEM_6:
 	case EC_ADDR_CPU_TEMP:
@@ -1117,6 +1123,26 @@ static ssize_t ctgp_offset_show(struct device *dev, struct device_attribute *att
 
 static DEVICE_ATTR_RW(ctgp_offset);
 
+static ssize_t battery_cycle_count_show(struct device *dev, struct device_attribute *attr,
+					char *buf)
+{
+	struct uniwill_data *data = dev_get_drvdata(dev);
+	unsigned int lo, hi;
+	int ret;
+
+	ret = regmap_read(data->regmap, EC_ADDR_BAT_CYCLE_COUNT_1, &lo);
+	if (ret < 0)
+		return ret;
+
+	ret = regmap_read(data->regmap, EC_ADDR_BAT_CYCLE_COUNT_2, &hi);
+	if (ret < 0)
+		return ret;
+
+	return sysfs_emit(buf, "%u\n", lo | hi << 8);
+}
+
+static DEVICE_ATTR_RO(battery_cycle_count);
+
 static void uniwill_reset_ctgp_offset(void *context)
 {
 	struct uniwill_data *data = context;
@@ -1371,6 +1397,7 @@ static struct attribute *uniwill_attrs[] = {
 	&dev_attr_breathing_in_suspend.attr,
 	/* Power-management-related */
 	&dev_attr_ctgp_offset.attr,
+	&dev_attr_battery_cycle_count.attr,
 	&dev_attr_usb_c_power_priority.attr,
 	&dev_attr_ac_auto_boot.attr,
 	&dev_attr_usb_powershare_high.attr,
@@ -1401,6 +1428,13 @@ static umode_t uniwill_attr_is_visible(struct kobject *kobj, struct attribute *a
 	    attr == &dev_attr_breathing_in_suspend.attr) {
 		if (uniwill_device_supports(data, UNIWILL_FEATURE_LIGHTBAR))
 			return attr->mode;
+	}
+
+	if (attr == &dev_attr_battery_cycle_count.attr) {
+		if (uniwill_device_supports(data, UNIWILL_FEATURE_BATTERY_CYCLE_COUNT))
+			return attr->mode;
+
+		return 0;
 	}
 
 	if (attr == &dev_attr_ctgp_offset.attr) {
@@ -3709,7 +3743,11 @@ static struct uniwill_device_descriptor avell_a52_mob_descriptor __initdata = {
 		    UNIWILL_FEATURE_NVIDIA_CTGP_CONTROL |
 		    UNIWILL_FEATURE_NVIDIA_CTGP_T1WR |
 		    UNIWILL_FEATURE_POWER_PROFILE |
+		    UNIWILL_FEATURE_KEYBOARD_BACKLIGHT |
+		    UNIWILL_FEATURE_BATTERY_CYCLE_COUNT |
 		    UNIWILL_FEATURE_DIRECT_FAN,
+	.kbd_led_single_color = false,
+	.kbd_led_max_brightness = 4,
 	/* The firmware power table for this GPU, panel and adapter allows +20 W */
 	.ctgp_offset_max = 20,
 };
@@ -4246,4 +4284,4 @@ module_exit(uniwill_exit);
 MODULE_AUTHOR("Armin Wolf <W_Armin@gmx.de>");
 MODULE_DESCRIPTION("Uniwill notebook driver");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("7.2.15-avell5-local");
+MODULE_VERSION("7.2.15-avell6-local");

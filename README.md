@@ -8,7 +8,8 @@ temperatures, and adds **Max fan**, so the [Omarchy cooling plugin](https://gith
 gets its **Max** button. It also sets the **TGP offset** (0 to 20 W, `/sys/bus/platform/devices/INOU0000:00/ctgp_offset`),
 and the install script turns on **Dynamic Boost** (`nvidia-powerd`). The **Power profile** (quiet, balanced, performance)
 appears through the kernel's platform-profile interface, so the Omarchy power menu drives the firmware, and the button
-next to the power key cycles it. Planned: daemon-driven fan curves, battery care, the keyboard backlight and BIOS tools.
+next to the power key cycles it. The **keyboard backlight** (RGB, 4 levels) is a standard LED (`uniwill:multicolor:kbd_backlight`), and the real battery cycle count is in
+`/sys/bus/platform/devices/INOU0000:00/battery_cycle_count`. Planned: the daemon, the charging profile and the interfaces.
 
 ## Layout
 
@@ -20,7 +21,8 @@ next to the power key cycles it. Planned: daemon-driven fan curves, battery care
 | `driver/patches/0003` | Upstreamable: the Avell DMI entry and Max fan |
 | `driver/patches/0004` | Upstreamable: TGP offset for this board (clamp to 20 W, forwarded to the graphics driver through the firmware's `T1WR`) |
 | `driver/patches/0005` | Upstreamable: Power profile through platform_profile, cycled by the performance button |
-| `driver/patches/0006` | **Local-only:** direct fan speed through the universal fan tables, with the kernel watchdog (ADR-0001, ADR-0003) |
+| `driver/patches/0006` | Upstreamable: RGB keyboard backlight and the real battery cycle count |
+| `driver/patches/0007` | **Local-only:** direct fan speed through the universal fan tables, with the kernel watchdog (ADR-0001, ADR-0003) |
 | `driver/dkms.conf` | DKMS package `uniwill-avell/7.2.15.1` |
 | `driver/checks/` | On-device check scripts. Each one writes to the EC and ends by restoring automatic behaviour |
 | `daemon/` | `avelld` and `avellctl` (Rust) |

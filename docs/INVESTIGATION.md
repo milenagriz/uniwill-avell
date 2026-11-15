@@ -349,3 +349,33 @@ except the two marked inferred:
 
 Also observed: Avell ships **OverClocking Feature** (`0x135`) enabled (form default 0, factory default 1) while keeping the Overclocking Lock set.
 The firmware fills `SetupCpuFeatures` at boot (it is not stored), and it decides whether several power-limit questions are shown.
+
+## 13. Keyboard backlight (#13, driver side)
+
+Upstreamable `patches/0006`: `UNIWILL_FEATURE_KEYBOARD_BACKLIGHT` for this board, RGB, 4 levels. Standard multicolour LED
+`/sys/class/leds/uniwill:multicolor:kbd_backlight` (`brightness` 0-4, `multi_intensity` red green blue 0-50). Observed:
+
+- Before: EC `0x078C` = `0x28` (level 1; "white only" bit 0 clear), colour `0x0769-0x076B` = `00 32 32`. "China mode" was already on
+  (`0x0766` bit 5), so the driver's init does not write `0x0782`.
+- Brightness 0 → 4: five distinct levels, and red, green, blue and white all distinct (seen by the owner): **RGB keyboard**.
+- The keyboard's brightness keys still work, and the LED follows them with `brightness_hw_changed` notifications (1 → 4 → 0 → 4).
+- `brightnessctl` lists the device (class `leds`, max 4), so the existing keyboard-brightness bar plugin can drive it.
+- Brightness 4 and colour `0 50 50` survive an s2idle suspend.
+- Unloading the driver turns the backlight off: the kernel's LED core does that for every LED it unregisters. Reboot and suspend do not.
+
+## 14. Battery care (#12, partial)
+
+Upstreamable `patches/0006`: the real **cycle count** from EC `0x04A6` (low byte) and `0x04A7` (high byte), as
+`/sys/bus/platform/devices/INOU0000:00/battery_cycle_count`. It reads **308** where ACPI `_BIX` reports 0. The byte order is inferred from
+plausibility: high byte first would give 13313. Wear is 2900 / 4100 mAh = 70% of design (ACPI `charge_full` / `charge_full_design`).
+A power-supply extension cannot replace `cycle_count`, because the ACPI battery already provides it.
+
+**Charging profile** (`BAT0/charge_types`, EC `0x07A6` bits 4-5; the EC advertises it with `0x078E` bit 3): the readback is verified on the device
+(`driver/checks/battery.sh`): `Standard` → bits 00 (high capacity), `Long_Life` → 01 (balanced), `Trickle` → 10 (stationary), restored afterwards.
+The charging behaviour is **not yet verified**: the battery was full, so nothing could show. Upstream registers either the charging profile or
+the charge cap (`0x07B9`), never both. So `UNIWILL_FEATURE_BATTERY_CHARGE_MODES` stays **off** in the descriptor until a discharge test:
+
+1. Unplug until the battery is below 80%, then plug in again.
+2. Run `driver/checks/battery.sh` with the feature enabled, and set `Trickle` (stationary).
+3. Watch `BAT0/status` and `capacity` until charging stops. Record the level, then repeat with `Long_Life`.
+4. The charge cap: only if the profile behaves, try `0x07B9` the same way.
