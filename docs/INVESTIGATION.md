@@ -244,3 +244,43 @@ and shutdown. Resume re-applies it (`0x0744` through the regmap cache, `T1WR` ex
   Dynamic Boost runs on AC only (inferred).
 - 60 + 20 + 25 would exceed the 95 W ceiling, so the enforced limit tops out at 95 W (inferred).
 - Load run (GPU power draw and temperature, offset 0 against 20): **not yet done**. No GPU load tool is installed.
+
+### 9.2 Later re-check (after the #5 work, `7.2.15-avell4`)
+
+With `nvidia-powerd` running (also after restarting it) and on AC: TGP offset 0 gives enforced 60 W, and 20 gives enforced **80 W**
+(+20 exactly, as the ticket predicted). The extra +25 W seen at 19:04 (enforced 85 W at offset 0) did not come back,
+and the Power profile does not change it at idle (observed). Dynamic Boost adjusts the budget with load, so the enforced
+limit at idle may not show it (inferred). The #4 load run should settle this. **Open.**
+
+## 10. Power profile (#5)
+
+Build `7.2.15-avell4`, upstreamable `patches/0005`. Platform-profile handler "uniwill" with three choices, mapped to EC `0x0751`
+bits 4/5/7 (TUXEDO's `uw_set_performance_profile_v1` mapping). Bit 6 (Max fan) is never touched; every read-modify-write of `0x0751` takes the same lock.
+
+| Profile | `0x0751` bits | PPD name |
+|---|---|---|
+| quiet | `0xA0` | power-saver |
+| balanced | `0x00` | balanced |
+| performance | `0x10` (the firmware's boot value) | performance |
+
+Observed on the device:
+- `driver/checks/power-profile.sh` passes 3 times in a row. Max fan survives a profile change (`0xE0` = quiet + Max fan), and the profile survives Max fan off.
+- PPD 0.30 (restarted once after the driver first appeared) reports `PlatformDriver: platform_profile`. Setting power-saver,
+  balanced and performance in PPD writes `a0`, `00` and `10`, and a kernel-side change shows up in PPD.
+- The button next to the power key reports WMI event `0xB0` (`KEY_F14`, code 184) and does **not** change `0x0751` itself.
+  The driver now cycles the profile in the kernel (`platform_profile_cycle()`): quiet → balanced → performance, and PPD follows.
+- The profile survives an s2idle suspend. The boot value is restored on unload and shutdown.
+- One early failed run, with `0x0751` changing right after a write, was not reproduced with nobody touching the button: probably
+  late button presses from the key test. A balanced → performance change between 19:16 and 19:33 is unexplained (not reproduced).
+
+Each profile under a 20 s all-core load (`openssl speed`, after 20 s of settling, `--measure`):
+
+| Profile | CPU package | CPU temp | Fan 1 / fan 2 (RPM) |
+|---|---|---|---|
+| quiet | 11.3 W | 52 °C | 2007 / 0 |
+| balanced | 54.8 W | 91 °C | 4834 / 4647 |
+| performance | 58.0 W | 90 °C | 5500 / 5259 |
+
+`MSR_PKG_POWER_LIMIT` (`0x610`) stays `0x4283c000a183c0` (PL1 = PL2 = 120 W) in all three profiles, and the MMIO RAPL limits are 0.
+So the firmware caps quiet at about 11 W some other way, from the EC side; the mechanism is **unknown**. Module checked with REA
+`inspect_kernel_module` (Evidence `ev_a0937c09e466aac5a8ef5082fcc97ef7bb332c779a50a9cb5e45de7de92d8d45`: version 7.2.15-avell4, signature present).

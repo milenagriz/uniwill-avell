@@ -1,0 +1,287 @@
+--- a/drivers/platform/x86/uniwill/uniwill-acpi.c
++++ b/drivers/platform/x86/uniwill/uniwill-acpi.c
+@@ -39,6 +39,7 @@
+ #include <linux/mutex.h>
+ #include <linux/notifier.h>
+ #include <linux/platform_device.h>
++#include <linux/platform_profile.h>
+ #include <linux/pm.h>
+ #include <linux/printk.h>
+ #include <linux/regmap.h>
+@@ -372,6 +373,7 @@
+ #define UNIWILL_FEATURE_FAN_BOOST		BIT(15)
+ /* The firmware forwards the cTGP offset to the NVIDIA platform device through T1WR */
+ #define UNIWILL_FEATURE_NVIDIA_CTGP_T1WR	BIT(16)
++#define UNIWILL_FEATURE_POWER_PROFILE		BIT(17)
+ 
+ enum usb_c_power_priority_options {
+ 	USB_C_POWER_PRIORITY_CHARGING = 0,
+@@ -398,9 +400,12 @@
+ 	bool last_super_key_enable_state;
+ 	bool last_touchpad_toggle_enable_state;
+ 	bool last_usb_powershare_high_state;
+-	struct mutex fan_boost_lock;	/* Protects fan_boost and pwm_mode */
++	struct mutex fan_boost_lock;	/* Protects EC_ADDR_MANUAL_FAN_CTRL, fan_boost and pwm_mode */
+ 	bool fan_boost;
+ 	u8 pwm_mode;
++	struct device *ppdev;
++	u8 power_profile_initial;
++	u8 power_profile_bits;
+ 	struct mutex super_key_lock;	/* Protects the toggling of the super key lock state */
+ 	struct list_head batteries;
+ 	struct mutex led_lock;		/* Protects writes to the lightbar registers */
+@@ -1666,10 +1671,6 @@
+ 		return 0;
+ 
+ 	if (uniwill_device_supports(data, UNIWILL_FEATURE_FAN_BOOST)) {
+-		ret = devm_mutex_init(data->dev, &data->fan_boost_lock);
+-		if (ret < 0)
+-			return ret;
+-
+ 		/* Always start with the EC's automatic fan curve */
+ 		data->pwm_mode = UNIWILL_PWM_MODE_AUTO;
+ 		ret = uniwill_set_fan_boost(data, false);
+@@ -2411,6 +2412,15 @@
+ 		sysfs_notify(&data->dev->kobj, NULL, "fn_lock");
+ 
+ 		return NOTIFY_OK;
++	case UNIWILL_OSD_PERFORMANCE_MODE_TOGGLE:
++		if (uniwill_device_supports(data, UNIWILL_FEATURE_POWER_PROFILE))
++			return notifier_from_errno(platform_profile_cycle());
++
++		mutex_lock(&data->input_lock);
++		sparse_keymap_report_event(data->input_device, action, 1, true);
++		mutex_unlock(&data->input_lock);
++
++		return NOTIFY_OK;
+ 	case UNIWILL_OSD_KB_LED_LEVEL0:
+ 		if (!uniwill_device_supports(data, UNIWILL_FEATURE_KEYBOARD_BACKLIGHT))
+ 			return NOTIFY_DONE;
+@@ -2445,6 +2455,117 @@
+ 	}
+ }
+ 
++
++/*
++ * Power profile: bits 4, 5 and 7 of EC_ADDR_MANUAL_FAN_CTRL select the
++ * firmware's operating mode (quiet 0xa0, balanced 0x00, performance 0x10).
++ * Bit 6 in the same register is Max fan, so all read-modify-write cycles on
++ * this register take fan_boost_lock. The EC does not change the mode on its
++ * own; the performance key only reports UNIWILL_OSD_PERFORMANCE_MODE_TOGGLE,
++ * which cycles the profile in the kernel.
++ */
++#define POWER_PROFILE_MASK		(FAN_MODE_USER | FAN_MODE_HIGH | FAN_MODE_TURBO)
++#define POWER_PROFILE_QUIET		(FAN_MODE_USER | FAN_MODE_HIGH)
++#define POWER_PROFILE_BALANCED		0x00
++#define POWER_PROFILE_PERFORMANCE	FAN_MODE_TURBO
++
++static int uniwill_power_profile_probe(void *drvdata, unsigned long *choices)
++{
++	set_bit(PLATFORM_PROFILE_QUIET, choices);
++	set_bit(PLATFORM_PROFILE_BALANCED, choices);
++	set_bit(PLATFORM_PROFILE_PERFORMANCE, choices);
++
++	return 0;
++}
++
++static int uniwill_power_profile_get(struct device *dev, enum platform_profile_option *profile)
++{
++	struct uniwill_data *data = dev_get_drvdata(dev);
++	unsigned int value;
++	int ret;
++
++	ret = regmap_read(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, &value);
++	if (ret < 0)
++		return ret;
++
++	switch (value & POWER_PROFILE_MASK) {
++	case POWER_PROFILE_QUIET:
++		*profile = PLATFORM_PROFILE_QUIET;
++		break;
++	case POWER_PROFILE_BALANCED:
++		*profile = PLATFORM_PROFILE_BALANCED;
++		break;
++	case POWER_PROFILE_PERFORMANCE:
++		*profile = PLATFORM_PROFILE_PERFORMANCE;
++		break;
++	default:
++		*profile = PLATFORM_PROFILE_CUSTOM;
++		break;
++	}
++
++	return 0;
++}
++
++static int uniwill_write_power_profile_bits(struct uniwill_data *data, unsigned int bits)
++{
++	guard(mutex)(&data->fan_boost_lock);
++
++	return regmap_update_bits(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, POWER_PROFILE_MASK, bits);
++}
++
++static int uniwill_power_profile_set(struct device *dev, enum platform_profile_option profile)
++{
++	struct uniwill_data *data = dev_get_drvdata(dev);
++
++	switch (profile) {
++	case PLATFORM_PROFILE_QUIET:
++		return uniwill_write_power_profile_bits(data, POWER_PROFILE_QUIET);
++	case PLATFORM_PROFILE_BALANCED:
++		return uniwill_write_power_profile_bits(data, POWER_PROFILE_BALANCED);
++	case PLATFORM_PROFILE_PERFORMANCE:
++		return uniwill_write_power_profile_bits(data, POWER_PROFILE_PERFORMANCE);
++	default:
++		return -EOPNOTSUPP;
++	}
++}
++
++static const struct platform_profile_ops uniwill_power_profile_ops = {
++	.probe = uniwill_power_profile_probe,
++	.profile_get = uniwill_power_profile_get,
++	.profile_set = uniwill_power_profile_set,
++};
++
++static void uniwill_restore_power_profile(void *context)
++{
++	struct uniwill_data *data = context;
++
++	uniwill_write_power_profile_bits(data, data->power_profile_initial);
++}
++
++static int uniwill_power_profile_init(struct uniwill_data *data)
++{
++	unsigned int value;
++	int ret;
++
++	if (!uniwill_device_supports(data, UNIWILL_FEATURE_POWER_PROFILE))
++		return 0;
++
++	ret = regmap_read(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, &value);
++	if (ret < 0)
++		return ret;
++
++	/* Hand the firmware back the mode it booted with */
++	data->power_profile_initial = value & POWER_PROFILE_MASK;
++	ret = devm_add_action_or_reset(data->dev, uniwill_restore_power_profile, data);
++	if (ret < 0)
++		return ret;
++
++	data->ppdev = devm_platform_profile_register(data->dev, "uniwill", data,
++						     &uniwill_power_profile_ops);
++
++	return PTR_ERR_OR_ZERO(data->ppdev);
++}
++
+ static int uniwill_input_init(struct uniwill_data *data)
+ {
+ 	int ret;
+@@ -2549,6 +2670,10 @@
+ 			return ret;
+ 	}
+ 
++	ret = devm_mutex_init(data->dev, &data->fan_boost_lock);
++	if (ret < 0)
++		return ret;
++
+ 	ret = uniwill_battery_init(data);
+ 	if (ret < 0)
+ 		return ret;
+@@ -2573,6 +2698,10 @@
+ 	if (ret < 0)
+ 		return ret;
+ 
++	ret = uniwill_power_profile_init(data);
++	if (ret < 0)
++		return ret;
++
+ 	return uniwill_input_init(data);
+ }
+ 
+@@ -2586,6 +2715,9 @@
+ 	if (uniwill_device_supports(data, UNIWILL_FEATURE_NVIDIA_CTGP_T1WR))
+ 		uniwill_set_ctgp_offset(data, 0);
+ 
++	if (uniwill_device_supports(data, UNIWILL_FEATURE_POWER_PROFILE))
++		uniwill_write_power_profile_bits(data, data->power_profile_initial);
++
+ 	regmap_clear_bits(data->regmap, EC_ADDR_AP_OEM, ENABLE_MANUAL_CTRL);
+ }
+ 
+@@ -2684,6 +2816,24 @@
+ 				 CTGP_DB_DB_ENABLE | CTGP_DB_CTGP_ENABLE);
+ }
+ 
++static int uniwill_suspend_power_profile(struct uniwill_data *data)
++{
++	unsigned int value;
++	int ret;
++
++	if (!uniwill_device_supports(data, UNIWILL_FEATURE_POWER_PROFILE))
++		return 0;
++
++	/* EC_ADDR_MANUAL_FAN_CTRL is volatile, so remember the mode ourselves */
++	ret = regmap_read(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, &value);
++	if (ret < 0)
++		return ret;
++
++	data->power_profile_bits = value & POWER_PROFILE_MASK;
++
++	return 0;
++}
++
+ static int uniwill_suspend(struct device *dev)
+ {
+ 	struct uniwill_data *data = dev_get_drvdata(dev);
+@@ -2717,6 +2867,10 @@
+ 	if (ret < 0)
+ 		return ret;
+ 
++	ret = uniwill_suspend_power_profile(data);
++	if (ret < 0)
++		return ret;
++
+ 	regcache_cache_only(data->regmap, true);
+ 	regcache_mark_dirty(data->regmap);
+ 
+@@ -2818,6 +2972,14 @@
+ 	return uniwill_set_fan_boost(data, data->fan_boost);
+ }
+ 
++static int uniwill_resume_power_profile(struct uniwill_data *data)
++{
++	if (!uniwill_device_supports(data, UNIWILL_FEATURE_POWER_PROFILE))
++		return 0;
++
++	return uniwill_write_power_profile_bits(data, data->power_profile_bits);
++}
++
+ static int uniwill_resume(struct device *dev)
+ {
+ 	struct uniwill_data *data = dev_get_drvdata(dev);
+@@ -2861,6 +3023,10 @@
+ 	if (ret < 0)
+ 		return ret;
+ 
++	ret = uniwill_resume_power_profile(data);
++	if (ret < 0)
++		return ret;
++
+ 	return uniwill_resume_usb_c_power_priority(data);
+ }
+ 
+@@ -3099,7 +3265,8 @@
+ 		    UNIWILL_FEATURE_SECONDARY_FAN |
+ 		    UNIWILL_FEATURE_FAN_BOOST |
+ 		    UNIWILL_FEATURE_NVIDIA_CTGP_CONTROL |
+-		    UNIWILL_FEATURE_NVIDIA_CTGP_T1WR,
++		    UNIWILL_FEATURE_NVIDIA_CTGP_T1WR |
++		    UNIWILL_FEATURE_POWER_PROFILE,
+ 	/* The firmware power table for this GPU, panel and adapter allows +20 W */
+ 	.ctgp_offset_max = 20,
+ };
+@@ -3636,4 +3803,4 @@
+ MODULE_AUTHOR("Armin Wolf <W_Armin@gmx.de>");
+ MODULE_DESCRIPTION("Uniwill notebook driver");
+ MODULE_LICENSE("GPL");
+-MODULE_VERSION("7.2.15-avell3");
++MODULE_VERSION("7.2.15-avell4");
