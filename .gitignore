@@ -10,4 +10,5 @@ modules.order
 .module-common.o
 .tmp_versions/
 compile_commands.json
+__pycache__/
 .cache/

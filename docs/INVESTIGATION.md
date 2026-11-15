@@ -332,3 +332,20 @@ the table registers: 8 → 13, 3 → off, 5 → off, 12 → 13, 255 → 200.
 Hard temperatures (chosen, not measured limits): CPU 95 °C, the temperature the CPU reaches within seconds under all-core load (section 7.4),
 so a sane curve is at full there anyway; GPU 87 °C, the usual ceiling for this NVIDIA Laptop GPU class (inferred).
 The firmware also runs the table's dummy zones at full speed above 115 °C (CPU) and 120 °C (GPU).
+
+## 12. BIOS image analysis (#18)
+
+`bios/analyze.py` (read-only; image file only) → `evidence/bios/analysis.md`, checked by `bios/test-analyze.sh`. AMI Aptio V,
+Setup driver `899407D7-99FE-43D8-9A21-79EC328CAC21` (242 forms), two NVAR stores. Everything is from this machine's image (observed),
+except the two marked inferred:
+
+| Target | Where | Factory / current | Route |
+|---|---|---|---|
+| Overclocking lock | `CpuSetup` `0xDF` (1 byte), next to CFG Lock `0x43` | 1 / 1 (set) | boot-time setting change (inferred: `CpuSetup` is boot-service, non-runtime, non-authenticated) |
+| Power limit overrides | `CpuSetup` PL1 override `0x1B`, PL1 `0x17` (mW, 4 bytes), PL1 window `0x1C`; PL2 override `0x1D`, PL2 `0x1E` | PL1 override off, PL2 override on with value 0 | boot-time setting change (inferred) |
+| cTDP table | `CpuSetup` `0x5B`/`0x5F` (PL1/PL2 = 120000 mW), window `0x63` = 96 | 120 W / 120 W, matching `MSR 0x610` | same |
+| Thermal throttle point | `CpuSetup` Tcc Activation Offset `0x7F` | 5 / 5: throttling at TjMax − 5 = 95 °C, which is where the CPU sits under load (7.4) | boot-time setting change (inferred) |
+| Hidden menus | not in the forms: the root form links Main, Advanced, Chipset, Security, Boot and Save & Exit without conditions | n/a | modified image, AMITSE page data (inferred) |
+
+Also observed: Avell ships **OverClocking Feature** (`0x135`) enabled (form default 0, factory default 1) while keeping the Overclocking Lock set.
+The firmware fills `SetupCpuFeatures` at boot (it is not stored), and it decides whether several power-limit questions are shown.
