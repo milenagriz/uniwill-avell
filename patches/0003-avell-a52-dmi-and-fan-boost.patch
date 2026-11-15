@@ -1,0 +1,291 @@
+--- a/drivers/platform/x86/uniwill/uniwill-acpi.c
++++ b/drivers/platform/x86/uniwill/uniwill-acpi.c
+@@ -369,6 +369,7 @@
+ #define UNIWILL_FEATURE_KEYBOARD_BACKLIGHT	BIT(12)
+ #define UNIWILL_FEATURE_AC_AUTO_BOOT		BIT(13)
+ #define UNIWILL_FEATURE_USB_POWERSHARE		BIT(14)
++#define UNIWILL_FEATURE_FAN_BOOST		BIT(15)
+ 
+ enum usb_c_power_priority_options {
+ 	USB_C_POWER_PRIORITY_CHARGING = 0,
+@@ -395,6 +396,9 @@
+ 	bool last_super_key_enable_state;
+ 	bool last_touchpad_toggle_enable_state;
+ 	bool last_usb_powershare_high_state;
++	struct mutex fan_boost_lock;	/* Protects fan_boost and pwm_mode */
++	bool fan_boost;
++	u8 pwm_mode;
+ 	struct mutex super_key_lock;	/* Protects the toggling of the super key lock state */
+ 	struct list_head batteries;
+ 	struct mutex led_lock;		/* Protects writes to the lightbar registers */
+@@ -602,6 +606,7 @@
+ 	case EC_ADDR_LIGHTBAR_AC_GREEN:
+ 	case EC_ADDR_LIGHTBAR_AC_BLUE:
+ 	case EC_ADDR_BIOS_OEM:
++	case EC_ADDR_MANUAL_FAN_CTRL:
+ 	case EC_ADDR_TRIGGER:
+ 	case EC_ADDR_RGB_RED:
+ 	case EC_ADDR_RGB_GREEN:
+@@ -643,6 +648,7 @@
+ 	case EC_ADDR_LIGHTBAR_AC_GREEN:
+ 	case EC_ADDR_LIGHTBAR_AC_BLUE:
+ 	case EC_ADDR_BIOS_OEM:
++	case EC_ADDR_MANUAL_FAN_CTRL:
+ 	case EC_ADDR_PWM_1:
+ 	case EC_ADDR_PWM_2:
+ 	case EC_ADDR_SUPPORT_2:
+@@ -682,6 +688,7 @@
+ 	case EC_ADDR_SECOND_FAN_RPM_2:
+ 	case EC_ADDR_BAT_ALERT:
+ 	case EC_ADDR_BIOS_OEM:
++	case EC_ADDR_MANUAL_FAN_CTRL:
+ 	case EC_ADDR_PWM_1:
+ 	case EC_ADDR_PWM_2:
+ 	case EC_ADDR_SUPPORT_2:
+@@ -1361,12 +1368,85 @@
+ 		return 0;
+ 	}
+ 
+-	if (uniwill_device_supports(data, feature))
+-		return 0444;
++	if (!uniwill_device_supports(data, feature))
++		return 0;
++
++	if (type == hwmon_pwm && uniwill_device_supports(data, UNIWILL_FEATURE_FAN_BOOST))
++		return 0644;
++
++	if (type == hwmon_pwm && attr == hwmon_pwm_enable)
++		return 0;
++
++	return 0444;
++}
++
++/*
++ * Fan boost ("full fan mode"): bit 6 of EC_ADDR_MANUAL_FAN_CTRL makes the EC
++ * run all fans at full speed; clearing it hands control back to the EC's own
++ * fan curve. There is a single bit for both fans, so pwm1/pwm2 share a mode.
++ *
++ * pwmN_enable follows the hwmon ABI:
++ *   0 - no fan speed control, i.e. full speed (boost on)
++ *   1 - manual: only pwmN = 255 (boost on) is accepted, the EC offers no
++ *       intermediate manual speeds through this interface
++ *   2 - automatic (EC fan curve, boost off)
++ */
++#define UNIWILL_PWM_MODE_FULL	0
++#define UNIWILL_PWM_MODE_MANUAL	1
++#define UNIWILL_PWM_MODE_AUTO	2
++
++static int uniwill_set_fan_boost(struct uniwill_data *data, bool enable)
++{
++	int ret;
++
++	ret = regmap_update_bits(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, FAN_MODE_BOOST,
++				 enable ? FAN_MODE_BOOST : 0);
++	if (ret < 0)
++		return ret;
++
++	data->fan_boost = enable;
+ 
+ 	return 0;
+ }
+ 
++static int uniwill_write(struct device *dev, enum hwmon_sensor_types type, u32 attr, int channel,
++			 long val)
++{
++	struct uniwill_data *data = dev_get_drvdata(dev);
++
++	if (type != hwmon_pwm || !uniwill_device_supports(data, UNIWILL_FEATURE_FAN_BOOST))
++		return -EOPNOTSUPP;
++
++	guard(mutex)(&data->fan_boost_lock);
++
++	switch (attr) {
++	case hwmon_pwm_enable:
++		switch (val) {
++		case UNIWILL_PWM_MODE_FULL:
++			data->pwm_mode = val;
++			return uniwill_set_fan_boost(data, true);
++		case UNIWILL_PWM_MODE_MANUAL:
++			data->pwm_mode = val;
++			return 0;
++		case UNIWILL_PWM_MODE_AUTO:
++			data->pwm_mode = val;
++			return uniwill_set_fan_boost(data, false);
++		default:
++			return -EINVAL;
++		}
++	case hwmon_pwm_input:
++		if (data->pwm_mode != UNIWILL_PWM_MODE_MANUAL)
++			return -EBUSY;
++
++		if (val != U8_MAX)
++			return -EINVAL;
++
++		return uniwill_set_fan_boost(data, true);
++	default:
++		return -EOPNOTSUPP;
++	}
++}
++
+ static int uniwill_read(struct device *dev, enum hwmon_sensor_types type, u32 attr, int channel,
+ 			long *val)
+ {
+@@ -1375,6 +1455,23 @@
+ 	__be16 rpm;
+ 	int ret;
+ 
++	if (type == hwmon_pwm && attr == hwmon_pwm_enable) {
++		ret = regmap_read(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, &value);
++		if (ret < 0)
++			return ret;
++
++		guard(mutex)(&data->fan_boost_lock);
++
++		/* The EC is the source of truth, e.g. a hotkey may have toggled boost */
++		data->fan_boost = !!(value & FAN_MODE_BOOST);
++		if (data->pwm_mode == UNIWILL_PWM_MODE_MANUAL)
++			*val = UNIWILL_PWM_MODE_MANUAL;
++		else
++			*val = data->fan_boost ? UNIWILL_PWM_MODE_FULL : UNIWILL_PWM_MODE_AUTO;
++
++		return 0;
++	}
++
+ 	switch (type) {
+ 	case hwmon_temp:
+ 		switch (channel) {
+@@ -1453,6 +1550,7 @@
+ 	.is_visible = uniwill_is_visible,
+ 	.read = uniwill_read,
+ 	.read_string = uniwill_read_string,
++	.write = uniwill_write,
+ };
+ 
+ static const struct hwmon_channel_info * const uniwill_info[] = {
+@@ -1464,8 +1562,8 @@
+ 			   HWMON_F_INPUT | HWMON_F_LABEL,
+ 			   HWMON_F_INPUT | HWMON_F_LABEL),
+ 	HWMON_CHANNEL_INFO(pwm,
+-			   HWMON_PWM_INPUT,
+-			   HWMON_PWM_INPUT),
++			   HWMON_PWM_INPUT | HWMON_PWM_ENABLE,
++			   HWMON_PWM_INPUT | HWMON_PWM_ENABLE),
+ 	NULL
+ };
+ 
+@@ -1474,9 +1572,17 @@
+ 	.info = uniwill_info,
+ };
+ 
++static void uniwill_disable_fan_boost(void *context)
++{
++	struct uniwill_data *data = context;
++
++	regmap_clear_bits(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, FAN_MODE_BOOST);
++}
++
+ static int uniwill_hwmon_init(struct uniwill_data *data)
+ {
+ 	struct device *hdev;
++	int ret;
+ 
+ 	if (!uniwill_device_supports(data, UNIWILL_FEATURE_CPU_TEMP) &&
+ 	    !uniwill_device_supports(data, UNIWILL_FEATURE_GPU_TEMP) &&
+@@ -1484,6 +1590,22 @@
+ 	    !uniwill_device_supports(data, UNIWILL_FEATURE_SECONDARY_FAN))
+ 		return 0;
+ 
++	if (uniwill_device_supports(data, UNIWILL_FEATURE_FAN_BOOST)) {
++		ret = devm_mutex_init(data->dev, &data->fan_boost_lock);
++		if (ret < 0)
++			return ret;
++
++		/* Always start with the EC's automatic fan curve */
++		data->pwm_mode = UNIWILL_PWM_MODE_AUTO;
++		ret = uniwill_set_fan_boost(data, false);
++		if (ret < 0)
++			return ret;
++
++		ret = devm_add_action_or_reset(data->dev, uniwill_disable_fan_boost, data);
++		if (ret < 0)
++			return ret;
++	}
++
+ 	hdev = devm_hwmon_device_register_with_info(data->dev, "uniwill", data,
+ 						    &uniwill_chip_info, NULL);
+ 
+@@ -2382,6 +2504,9 @@
+ {
+ 	struct uniwill_data *data = platform_get_drvdata(pdev);
+ 
++	if (uniwill_device_supports(data, UNIWILL_FEATURE_FAN_BOOST))
++		regmap_clear_bits(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, FAN_MODE_BOOST);
++
+ 	regmap_clear_bits(data->regmap, EC_ADDR_AP_OEM, ENABLE_MANUAL_CTRL);
+ }
+ 
+@@ -2597,6 +2722,16 @@
+ 	return usb_c_power_priority_restore(data);
+ }
+ 
++static int uniwill_resume_fan_boost(struct uniwill_data *data)
++{
++	if (!uniwill_device_supports(data, UNIWILL_FEATURE_FAN_BOOST))
++		return 0;
++
++	guard(mutex)(&data->fan_boost_lock);
++
++	return uniwill_set_fan_boost(data, data->fan_boost);
++}
++
+ static int uniwill_resume(struct device *dev)
+ {
+ 	struct uniwill_data *data = dev_get_drvdata(dev);
+@@ -2636,6 +2771,10 @@
+ 	if (ret < 0)
+ 		return ret;
+ 
++	ret = uniwill_resume_fan_boost(data);
++	if (ret < 0)
++		return ret;
++
+ 	return uniwill_resume_usb_c_power_priority(data);
+ }
+ 
+@@ -2860,8 +2999,31 @@
+ 	.kbd_led_max_brightness = 2,
+ };
+ 
++/*
++ * Avell A52 MOB (Uniwill chassis, i5-11400H + RTX 3050 Mobile, EC project ID 0x10).
++ * Only features verified on this machine are enabled.
++ */
++static struct uniwill_device_descriptor avell_a52_mob_descriptor __initdata = {
++	.features = UNIWILL_FEATURE_FN_LOCK |
++		    UNIWILL_FEATURE_SUPER_KEY |
++		    UNIWILL_FEATURE_TOUCHPAD_TOGGLE |
++		    UNIWILL_FEATURE_CPU_TEMP |
++		    UNIWILL_FEATURE_GPU_TEMP |
++		    UNIWILL_FEATURE_PRIMARY_FAN |
++		    UNIWILL_FEATURE_SECONDARY_FAN |
++		    UNIWILL_FEATURE_FAN_BOOST,
++};
++
+ static const struct dmi_system_id uniwill_dmi_table[] __initconst = {
+ 	{
++		.ident = "Avell A52 MOB",
++		.matches = {
++			DMI_MATCH(DMI_SYS_VENDOR, "Avell High Performance"),
++			DMI_EXACT_MATCH(DMI_BOARD_NAME, "Avell A52 MOB"),
++		},
++		.driver_data = &avell_a52_mob_descriptor,
++	},
++	{
+ 		.ident = "AiStone X4SP4NAL",
+ 		.matches = {
+ 			DMI_MATCH(DMI_SYS_VENDOR, "AiStone"),
+@@ -3384,3 +3546,4 @@
+ MODULE_AUTHOR("Armin Wolf <W_Armin@gmx.de>");
+ MODULE_DESCRIPTION("Uniwill notebook driver");
+ MODULE_LICENSE("GPL");
++MODULE_VERSION("7.2.15-avell1");
