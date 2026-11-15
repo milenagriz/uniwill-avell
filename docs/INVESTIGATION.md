@@ -243,14 +243,23 @@ and shutdown. Resume re-applies it (`0x0744` through the regmap cache, `T1WR` ex
   says "Dynamic Boost enabled". `nvidia-powerd` logs that the firmware disabled the DC (battery) controller, which is expected:
   Dynamic Boost runs on AC only (inferred).
 - 60 + 20 + 25 would exceed the 95 W ceiling, so the enforced limit tops out at 95 W (inferred).
-- Load run (GPU power draw and temperature, offset 0 against 20): **not yet done**. No GPU load tool is installed.
+- Load run (observed, 2026-11-15, on AC, performance profile, `nvidia-powerd` running): `prime-run glmark2 --off-screen --run-forever -b terrain`, sampled every 2 s for 36 s:
+
+  | TGP offset | Enforced limit under load | GPU draw | GPU temp | Graphics clock | Utilisation |
+  |---|---|---|---|---|---|
+  | 0 | 85 W (two samples dipped to 77 and 81 W) | 65–68 W | 59 → 68 °C | 1965–1972 MHz | 88–90% |
+  | 20 | 95 W | 65–69 W | 63 → 70 °C | 1950–1972 MHz | 74–90% |
+
+  Dynamic Boost adds +25 W under load, and the TGP offset adds +20 W on top (observed). The terrain scene is **not power-limited**:
+  it draws about 67 W at a pinned clock in both runs, so it cannot show a performance gain from the higher ceiling. A power-bound
+  game is needed for that (unknown until measured). Even at offset 0 the draw is above the old 60 W budget, which only Dynamic Boost allows.
 
 ### 9.2 Later re-check (after the #5 work, `7.2.15-avell4`)
 
 With `nvidia-powerd` running (also after restarting it) and on AC: TGP offset 0 gives enforced 60 W, and 20 gives enforced **80 W**
 (+20 exactly, as the ticket predicted). The extra +25 W seen at 19:04 (enforced 85 W at offset 0) did not come back,
 and the Power profile does not change it at idle (observed). Dynamic Boost adjusts the budget with load, so the enforced
-limit at idle may not show it (inferred). The #4 load run should settle this. **Open.**
+limit at idle may not show it (inferred). Settled by the load run below: Dynamic Boost applies under load.
 
 ## 10. Power profile (#5)
 
