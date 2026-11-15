@@ -192,3 +192,55 @@ written, so the mode read `1` while the firmware was in control. Now (`7.2.15-av
 
 `driver/checks/fans.sh` on the device (observed): auto → manual reaches about 5800 RPM at once (`pwm1 = 255`), max → manual stays full,
 every switch back to `2` returns to the firmware curve (`pwm1` about 76), and three cycles of the Cooling widget's own sequence all pass.
+
+## 9. TGP offset: first live test (#4)
+
+Test build `7.2.15-avell3` with `UNIWILL_FEATURE_NVIDIA_CTGP_CONTROL` enabled and the offset clamped to 20 W (not committed).
+
+| Step | Result | Status |
+|---|---|---|
+| Baseline `nvidia-smi` | default 60 W, enforced 60 W, max 95 W | observed |
+| `ctgp_offset = 20` (EC `0x0744`) | the write is accepted and reads back 20 | observed |
+| `nvidia-smi` 3 s later | default 60 W, enforced 60 W: **unchanged** | observed |
+| `ctgp_offset = 21` | rejected (`-EINVAL`) | observed |
+| Restore | 0 | observed |
+
+**Why it had no effect** (observed in `evidence/acpi/DSDT.dsl`, this machine's own tables):
+
+- The ACPI field map of EC RAM (`OperationRegion ECMG` at `0xFE410000`) names `0x0743` bits 0–1 `GNEN`/`ECDC` and
+  `0x0744`–`0x0747` `CTVA`, `DBCT`, `MXDB`, `MIDB`.
+- The NVIDIA platform device `\_SB.NPCF` takes its TGP offset from `NPCF.UOCT`, which the firmware sets to
+  `EC0.CTWA × 8`. `CTWA` is a **different byte, EC `0x0788`** (holds 0).
+- `UOCT` is only refreshed, followed by `Notify (NPCF, 0xC0)`, by EC query `_Q83` or by the vendor method
+  `\_SB.INOU.T1WR` (`Arg0 = 0x1171`: writes `CTWA = Arg1`; `Arg0 = 0x71`: re-reads `CTWA`).
+  `INOU` is the ACPI device this driver already binds to (`INOU0000`). A plain EC RAM write triggers neither.
+- `T1WR` also covers Dynamic Boost (`0x1172`: `NPCF.DBAC = Arg1`; `0x1173`: Dynamic Boost min/max into
+  `EC0.DBD1/DBD2` and `NPCF.AMAT/AMIT`; `0x73`: from `EC0.DBEN`), `0x2273` (`NPCF.ATPP`), `0x1176` (`EC0.CGCT`, notifies the GPU),
+  and `0x81` (CPU `APL1`).
+
+So whether EC `0x0744` matters to the EC itself is **unknown**. The graphics driver only learns a TGP offset through
+`CTWA` plus a notify. That alternative route needs a decision before any write to `0x0788` or a call to `T1WR`.
+
+### 9.1 The T1WR route (decision: write both `0x0744` and `T1WR`)
+
+Build `7.2.15-avell3` (upstreamable `patches/0004`): `ctgp_offset` (clamped to the firmware table's 20 W) writes EC
+`0x0744` and calls `\_SB.INOU.T1WR(0x1171, W, 0)`. The offset is 0 at load and is set back to 0 at unload
+and shutdown. Resume re-applies it (`0x0744` through the regmap cache, `T1WR` explicitly). Module checked with REA
+`inspect_kernel_module` (Evidence `ev_585631cab96002465ebb6fea4d866e6ad8dac9bb137fb4fc07b3ab2e119f724e`: version 7.2.15-avell3, signature present).
+
+| Condition | Default | Enforced | Max | Status |
+|---|---|---|---|---|
+| No `nvidia-powerd`, TGP offset 0 or 20 (`0x0744` only) | 60 W | 60 W | 95 W | observed |
+| `nvidia-powerd` running, TGP offset 0 | 60 W | 85 W | 95 W | observed |
+| `nvidia-powerd` running, TGP offset 20 (`0x0744` + `T1WR`) | 60 W | **95 W** | 95 W | observed |
+| Back to 0 | 60 W | 85 W | 95 W | observed |
+| After a real suspend (s2idle, `rtcwake`) with offset 20 | 60 W | 95 W | 95 W | observed; `ctgp_offset` still reads 20 |
+| 21 W | rejected | | | observed |
+
+- The graphics driver's **default** limit stays at 60 W. The offset shows up in the **enforced** limit, as the ticket allowed for.
+- **Dynamic Boost** (`nvidia-powerd`, enabled by `scripts/install.sh`): starting the daemon raises the enforced limit by 25 W,
+  which matches EC `0x0746` (`MXDB` = `0x19` = 25) rather than the table's 15 W (observed). `nvidia-smi` has no field that
+  says "Dynamic Boost enabled". `nvidia-powerd` logs that the firmware disabled the DC (battery) controller, which is expected:
+  Dynamic Boost runs on AC only (inferred).
+- 60 + 20 + 25 would exceed the 95 W ceiling, so the enforced limit tops out at 95 W (inferred).
+- Load run (GPU power draw and temperature, offset 0 against 20): **not yet done**. No GPU load tool is installed.

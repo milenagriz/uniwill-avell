@@ -370,6 +370,8 @@
 #define UNIWILL_FEATURE_AC_AUTO_BOOT		BIT(13)
 #define UNIWILL_FEATURE_USB_POWERSHARE		BIT(14)
 #define UNIWILL_FEATURE_FAN_BOOST		BIT(15)
+/* The firmware forwards the cTGP offset to the NVIDIA platform device through T1WR */
+#define UNIWILL_FEATURE_NVIDIA_CTGP_T1WR	BIT(16)
 
 enum usb_c_power_priority_options {
 	USB_C_POWER_PRIORITY_CHARGING = 0,
@@ -403,6 +405,8 @@ struct uniwill_data {
 	struct list_head batteries;
 	struct mutex led_lock;		/* Protects writes to the lightbar registers */
 	u8 lightbar_max_brightness;
+	u8 ctgp_offset_max;
+	u8 ctgp_offset;
 	struct led_classdev_mc led_mc_cdev;
 	struct mc_subled led_mc_subled_info[LED_CHANNELS];
 	bool kbd_led_single_color;
@@ -434,6 +438,8 @@ struct uniwill_device_descriptor {
 	bool kbd_led_single_color;
 	u8 kbd_led_max_brightness;
 	u8 lightbar_max_brightness;
+	/* Highest cTGP offset in watts the firmware allows, 0 if not limited */
+	u8 ctgp_offset_max;
 	/* Executed during driver probing */
 	int (*probe)(struct uniwill_data *data);
 };
@@ -991,6 +997,54 @@ static ssize_t breathing_in_suspend_show(struct device *dev, struct device_attri
 
 static DEVICE_ATTR_RW(breathing_in_suspend);
 
+/*
+ * The NVIDIA platform device (\_SB.NPCF) does not read the cTGP offset from
+ * EC_ADDR_CTGP_DB_CTGP_OFFSET. On some firmware it takes it from a separate
+ * EC byte that the vendor method T1WR sets (command 0x1171, value in watts)
+ * before notifying NPCF, so the graphics driver picks up the new limit.
+ */
+#define UNIWILL_T1WR_SET_CTGP	0x1171
+
+static int uniwill_ctgp_t1wr(struct uniwill_data *data, unsigned int watts)
+{
+	union acpi_object args[3] = {
+		{ .integer = { .type = ACPI_TYPE_INTEGER, .value = UNIWILL_T1WR_SET_CTGP } },
+		{ .integer = { .type = ACPI_TYPE_INTEGER, .value = watts } },
+		{ .integer = { .type = ACPI_TYPE_INTEGER, .value = 0 } },
+	};
+	struct acpi_object_list input = {
+		.count = ARRAY_SIZE(args),
+		.pointer = args,
+	};
+	acpi_status status;
+
+	if (!uniwill_device_supports(data, UNIWILL_FEATURE_NVIDIA_CTGP_T1WR))
+		return 0;
+
+	status = acpi_evaluate_object(data->handle, "T1WR", &input, NULL);
+	if (ACPI_FAILURE(status))
+		return -EIO;
+
+	return 0;
+}
+
+static int uniwill_set_ctgp_offset(struct uniwill_data *data, unsigned int watts)
+{
+	int ret;
+
+	ret = regmap_write(data->regmap, EC_ADDR_CTGP_DB_CTGP_OFFSET, watts);
+	if (ret < 0)
+		return ret;
+
+	ret = uniwill_ctgp_t1wr(data, watts);
+	if (ret < 0)
+		return ret;
+
+	data->ctgp_offset = watts;
+
+	return 0;
+}
+
 static ssize_t ctgp_offset_store(struct device *dev, struct device_attribute *attr,
 				 const char *buf, size_t count)
 {
@@ -1002,10 +1056,10 @@ static ssize_t ctgp_offset_store(struct device *dev, struct device_attribute *at
 	if (ret < 0)
 		return ret;
 
-	if (value > U8_MAX)
+	if (value > (data->ctgp_offset_max ?: U8_MAX))
 		return -EINVAL;
 
-	ret = regmap_write(data->regmap, EC_ADDR_CTGP_DB_CTGP_OFFSET, value);
+	ret = uniwill_set_ctgp_offset(data, value);
 	if (ret < 0)
 		return ret;
 
@@ -1027,6 +1081,13 @@ static ssize_t ctgp_offset_show(struct device *dev, struct device_attribute *att
 }
 
 static DEVICE_ATTR_RW(ctgp_offset);
+
+static void uniwill_reset_ctgp_offset(void *context)
+{
+	struct uniwill_data *data = context;
+
+	uniwill_set_ctgp_offset(data, 0);
+}
 
 static int uniwill_nvidia_ctgp_init(struct uniwill_data *data)
 {
@@ -1052,7 +1113,15 @@ static int uniwill_nvidia_ctgp_init(struct uniwill_data *data)
 	if (ret < 0)
 		return ret;
 
-	return 0;
+	if (!uniwill_device_supports(data, UNIWILL_FEATURE_NVIDIA_CTGP_T1WR))
+		return 0;
+
+	/* Start from, and return to, the firmware default of no offset */
+	ret = uniwill_set_ctgp_offset(data, 0);
+	if (ret < 0)
+		return ret;
+
+	return devm_add_action_or_reset(data->dev, uniwill_reset_ctgp_offset, data);
 }
 
 static const char * const usb_c_power_priority_text[] = {
@@ -2467,6 +2536,7 @@ static int uniwill_probe(struct platform_device *pdev)
 	data->kbd_led_single_color = device_descriptor.kbd_led_single_color;
 	data->kbd_led_max_brightness = device_descriptor.kbd_led_max_brightness;
 	data->lightbar_max_brightness = device_descriptor.lightbar_max_brightness;
+	data->ctgp_offset_max = device_descriptor.ctgp_offset_max;
 
 	/*
 	 * Some devices might need to perform some device-specific initialization steps
@@ -2512,6 +2582,9 @@ static void uniwill_shutdown(struct platform_device *pdev)
 
 	if (uniwill_device_supports(data, UNIWILL_FEATURE_FAN_BOOST))
 		regmap_clear_bits(data->regmap, EC_ADDR_MANUAL_FAN_CTRL, FAN_MODE_BOOST);
+
+	if (uniwill_device_supports(data, UNIWILL_FEATURE_NVIDIA_CTGP_T1WR))
+		uniwill_set_ctgp_offset(data, 0);
 
 	regmap_clear_bits(data->regmap, EC_ADDR_AP_OEM, ENABLE_MANUAL_CTRL);
 }
@@ -2716,8 +2789,15 @@ static int uniwill_resume_nvidia_ctgp(struct uniwill_data *data)
 	if (!uniwill_device_supports(data, UNIWILL_FEATURE_NVIDIA_CTGP_CONTROL))
 		return 0;
 
-	return regmap_set_bits(data->regmap, EC_ADDR_CTGP_DB_CTRL,
-			       CTGP_DB_DB_ENABLE | CTGP_DB_CTGP_ENABLE);
+	int ret;
+
+	ret = regmap_set_bits(data->regmap, EC_ADDR_CTGP_DB_CTRL,
+			      CTGP_DB_DB_ENABLE | CTGP_DB_CTGP_ENABLE);
+	if (ret < 0)
+		return ret;
+
+	/* The T1WR target is not part of the regmap cache */
+	return uniwill_ctgp_t1wr(data, data->ctgp_offset);
 }
 
 static int uniwill_resume_usb_c_power_priority(struct uniwill_data *data)
@@ -3017,7 +3097,11 @@ static struct uniwill_device_descriptor avell_a52_mob_descriptor __initdata = {
 		    UNIWILL_FEATURE_GPU_TEMP |
 		    UNIWILL_FEATURE_PRIMARY_FAN |
 		    UNIWILL_FEATURE_SECONDARY_FAN |
-		    UNIWILL_FEATURE_FAN_BOOST,
+		    UNIWILL_FEATURE_FAN_BOOST |
+		    UNIWILL_FEATURE_NVIDIA_CTGP_CONTROL |
+		    UNIWILL_FEATURE_NVIDIA_CTGP_T1WR,
+	/* The firmware power table for this GPU, panel and adapter allows +20 W */
+	.ctgp_offset_max = 20,
 };
 
 static const struct dmi_system_id uniwill_dmi_table[] __initconst = {
@@ -3552,4 +3636,4 @@ module_exit(uniwill_exit);
 MODULE_AUTHOR("Armin Wolf <W_Armin@gmx.de>");
 MODULE_DESCRIPTION("Uniwill notebook driver");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("7.2.15-avell2");
+MODULE_VERSION("7.2.15-avell3");

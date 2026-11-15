@@ -5,7 +5,8 @@ Avell has never shipped a Linux driver, firmware update or Linux software for it
 
 What works today: a patched `uniwill-laptop` driver that binds to this laptop, shows both fans and both
 temperatures, and adds **Max fan**, so the [Omarchy cooling plugin](https://github.com/ismoil77/omarchy-cooling)
-gets its **Max** button. Planned: **Power profile** switching, a **TGP offset** raise with **Dynamic Boost**,
+gets its **Max** button. It also sets the **TGP offset** (0 to 20 W, `/sys/bus/platform/devices/INOU0000:00/ctgp_offset`),
+and the install script turns on **Dynamic Boost** (`nvidia-powerd`). Planned: **Power profile** switching,
 daemon-driven fan curves, battery care, the keyboard backlight and BIOS tools.
 
 ## Layout
@@ -15,7 +16,8 @@ daemon-driven fan curves, battery care, the keyboard backlight and BIOS tools.
 | `driver/` | The kernel driver, packaged with DKMS |
 | `driver/src/` | The driver sources DKMS builds (linux v7.2.15 plus `driver/patches/`) |
 | `driver/patches/0001`, `0002` | The `uniwill` parts of Omarchy kernel patches 0800 and 0803, so the module matches the running `linux-omarchy` kernel |
-| `driver/patches/0003` | **Our change:** the Avell DMI entry and Max fan |
+| `driver/patches/0003` | Upstreamable: the Avell DMI entry and Max fan |
+| `driver/patches/0004` | Upstreamable: TGP offset for this board (clamp to 20 W, forwarded to the graphics driver through the firmware's `T1WR`) |
 | `driver/dkms.conf` | DKMS package `uniwill-avell/7.2.15.1` |
 | `driver/checks/` | On-device check scripts. Each one writes to the EC and ends by restoring automatic behaviour |
 | `daemon/` | `avelld` and `avellctl` (Rust) |

@@ -28,6 +28,13 @@ sudo cp "$DRIVER"/src/Makefile "$DRIVER"/src/*.[ch] "$DRIVER"/dkms.conf "$DEST"/
 sudo dkms install "$NAME/$VERSION"
 echo uniwill-laptop | sudo tee /etc/modules-load.d/uniwill-avell.conf >/dev/null
 
+# Dynamic Boost: NVIDIA's power daemon moves spare CPU budget to the graphics card (on AC)
+if systemctl list-unit-files nvidia-powerd.service >/dev/null 2>&1; then
+  sudo systemctl enable --now nvidia-powerd.service
+else
+  echo "Warning: nvidia-powerd.service not found; Dynamic Boost stays off (install nvidia-utils)."
+fi
+
 # Swap the running module for the new one
 sudo modprobe -r uniwill-laptop 2>/dev/null || true
 sudo modprobe uniwill-laptop

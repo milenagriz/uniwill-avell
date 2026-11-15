@@ -10,6 +10,7 @@ for h in /sys/class/hwmon/hwmon*; do
   [ "$(cat "$h/name" 2>/dev/null)" = uniwill ] && [ -w "$h/pwm1_enable" ] && echo 2 | sudo tee "$h/pwm1_enable" >/dev/null || true
 done
 
+sudo systemctl disable --now nvidia-powerd.service 2>/dev/null || true
 sudo modprobe -r uniwill-laptop 2>/dev/null || true
 sudo dkms remove "$NAME/$VERSION" --all 2>/dev/null || true
 sudo rm -rf "/usr/src/$NAME-$VERSION"
