@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the Avell A52 MOB control stack. Today: the patched uniwill-laptop driver via DKMS.
+# Install the Avell A52 MOB control stack: the patched uniwill-laptop driver (DKMS),
+# the avelld daemon with its systemd service and D-Bus policy, and the avellctl CLI.
 set -euo pipefail
 
 NAME=uniwill-avell
@@ -40,3 +41,14 @@ sudo modprobe -r uniwill-laptop 2>/dev/null || true
 sudo modprobe uniwill-laptop
 
 echo "Loaded uniwill-laptop $(cat /sys/module/uniwill_laptop/version 2>/dev/null || echo '?')"
+
+# Daemon and CLI: built as the calling user, installed as root
+command -v cargo >/dev/null || { echo "cargo is not installed (see mise.toml)"; exit 1; }
+(cd "$REPO/daemon" && cargo build --release --locked)
+sudo install -m 755 "$REPO/daemon/target/release/avelld" "$REPO/daemon/target/release/avellctl" /usr/local/bin/
+sudo install -m 644 "$REPO/daemon/dist/org.avell.Control1.conf" /usr/share/dbus-1/system.d/
+sudo install -m 644 "$REPO/daemon/dist/avelld.service" /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable avelld.service
+sudo systemctl restart avelld.service
+echo "avelld $(systemctl is-active avelld.service), avellctl in /usr/local/bin"

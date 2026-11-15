@@ -9,7 +9,8 @@ gets its **Max** button. It also sets the **TGP offset** (0 to 20 W, `/sys/bus/p
 and the install script turns on **Dynamic Boost** (`nvidia-powerd`). The **Power profile** (quiet, balanced, performance)
 appears through the kernel's platform-profile interface, so the Omarchy power menu drives the firmware, and the button
 next to the power key cycles it. The **keyboard backlight** (RGB, 4 levels) is a standard LED (`uniwill:multicolor:kbd_backlight`), and the real battery cycle count is in
-`/sys/bus/platform/devices/INOU0000:00/battery_cycle_count`. Planned: the daemon, the charging profile and the interfaces.
+`/sys/bus/platform/devices/INOU0000:00/battery_cycle_count`. The **daemon** `avelld` serves the whole state on the system bus, and `avellctl status` prints it (see `daemon/README.md`).
+Planned: profile bundles, fan curves, charger rules, game detection, the charging profile and the interfaces.
 
 ## Layout
 

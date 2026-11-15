@@ -1,0 +1,29 @@
+[package]
+name = "avell"
+version = "0.1.0"
+edition = "2024"
+description = "Daemon (avelld) and CLI (avellctl) for the Avell A52 MOB control stack"
+license = "GPL-2.0-or-later"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "avelld"
+path = "src/bin/avelld.rs"
+
+[[bin]]
+name = "avellctl"
+path = "src/bin/avellctl.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync", "signal", "process"] }
+toml = "1"
+zbus = { version = "6", default-features = false, features = ["tokio-multithread", "proxy", "service", "p2p"] }
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

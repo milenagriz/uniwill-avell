@@ -1,0 +1,14 @@
+[Unit]
+Description=Avell A52 MOB control daemon
+Documentation=https://github.com/milenagriz5-dotcom/uniwill-avell
+After=power-profiles-daemon.service
+Wants=power-profiles-daemon.service
+
+[Service]
+Type=dbus
+BusName=org.avell.Control1
+ExecStart=/usr/local/bin/avelld
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
