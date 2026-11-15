@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Remove the patched driver; the kernel's own uniwill-laptop stays (it will not auto-load on this board).
+# Remove the control stack. Today: the patched driver; the kernel's own uniwill-laptop stays (it will not auto-load on this board).
 set -euo pipefail
 
 NAME=uniwill-avell
-VERSION=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' "$(dirname "$0")/../dkms.conf")
+VERSION=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' "$(dirname "$0")/../driver/dkms.conf")
 
 # Fans back to automatic before the driver goes away (the driver also does this on unload)
 for h in /sys/class/hwmon/hwmon*; do

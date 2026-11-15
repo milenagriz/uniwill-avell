@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live check of the fan boost interface: full speed for ~10 s, then back to automatic.
+# On-device check of Max fan: full speed for ~10 s, then back to automatic.
 set -euo pipefail
 
 H=""

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Install the patched uniwill-laptop driver for the Avell A52 MOB via DKMS.
+# Install the Avell A52 MOB control stack. Today: the patched uniwill-laptop driver via DKMS.
 set -euo pipefail
 
 NAME=uniwill-avell
-VERSION=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' "$(dirname "$0")/../dkms.conf")
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+DRIVER=$REPO/driver
+VERSION=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' "$DRIVER/dkms.conf")
 DEST=/usr/src/$NAME-$VERSION
 
 command -v dkms >/dev/null || { echo "dkms is not installed (sudo pacman -S dkms)"; exit 1; }
@@ -22,8 +23,7 @@ fi
 
 sudo rm -rf "$DEST"
 sudo mkdir -p "$DEST"
-sudo cp "$REPO"/src/* "$REPO"/dkms.conf "$DEST"/
-sudo cp "$REPO"/patches/0003-avell-a52-dmi-and-fan-boost.patch "$DEST"/
+sudo cp "$DRIVER"/src/* "$DRIVER"/dkms.conf "$DEST"/
 
 sudo dkms install "$NAME/$VERSION"
 echo uniwill-laptop | sudo tee /etc/modules-load.d/uniwill-avell.conf >/dev/null
