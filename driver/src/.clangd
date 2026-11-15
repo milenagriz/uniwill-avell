@@ -1,0 +1,42 @@
+# clangd setup for the kernel module. The kernel is built with GCC, so remove the
+# GCC-only flags clang does not understand. Generate compile_commands.json with:
+#   make -C /usr/lib/modules/$(uname -r)/build M=$PWD modules compile_commands.json
+CompileFlags:
+  Remove:
+    - -mpreferred-stack-boundary=*
+    - -mindirect-branch*
+    - -mfunction-return=*
+    - -mrecord-mcount
+    - -fno-allow-store-data-races
+    - -fconserve-stack
+    - -fmin-function-alignment=*
+    - -fzero-init-padding-bits=*
+    - -fsanitize=bounds-strict
+    - -mharden-sls=*
+    - -fno-ipa-sra
+    - -fno-tree-loop-im
+    - -mskip-rax-setup
+    - -falign-jumps=*
+    - -falign-loops=*
+    - -Wno-maybe-uninitialized
+    - -Wno-alloc-size-larger-than
+    - -Wimplicit-fallthrough=*
+    - -Wpacked-not-aligned
+    - -Wno-stringop-overflow
+    - -Wno-restrict
+    - -Wno-packed-not-aligned
+    - -Wno-format-truncation
+    - -Wno-format-overflow
+    - -Wno-dangling-pointer
+    - -Wno-array-bounds
+    - -Werror=designated-init
+    - -fstrict-flex-arrays=*
+    - -fdiagnostics-show-context=*
+    - -mstack-protector-guard-reg=*
+    - -mstack-protector-guard-symbol=*
+    - -fno-var-tracking-assignments
+    - -fms-anonymous-structs
+Diagnostics:
+  Suppress:
+    - unknown_argument
+    - drv_unknown_argument

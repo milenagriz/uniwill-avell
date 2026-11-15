@@ -36,10 +36,14 @@ The driver adds a standard hwmon `pwmN_enable` file, backed by the EC's own Max 
 | `pwmN_enable` | Meaning |
 |---|---|
 | `0` | Max fan |
-| `1` | Manual. Only `pwmN = 255` (full speed) is accepted for now |
+| `1` | Manual. Starts at full speed straight away; only `pwmN = 255` is accepted for now |
 | `2` | Automatic (the firmware's own fan curve). This is the default after the driver loads |
 
-Both fans share one EC bit, so changing `pwm1_enable` also changes `pwm2_enable`.
+Both fans share one EC bit, so changing `pwm1_enable` also changes `pwm2_enable`. The mode read always follows
+the EC: if the firmware or a hotkey turns Max fan off, the mode reads `2`, never `1`.
+
+To get clangd working in an editor, generate `driver/src/compile_commands.json` with
+`make -C /usr/lib/modules/$(uname -r)/build M=$PWD modules compile_commands.json` in `driver/src` (`driver/src/.clangd` strips the GCC-only flags).
 
 ## Install
 

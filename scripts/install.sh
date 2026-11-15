@@ -23,7 +23,7 @@ fi
 
 sudo rm -rf "$DEST"
 sudo mkdir -p "$DEST"
-sudo cp "$DRIVER"/src/* "$DRIVER"/dkms.conf "$DEST"/
+sudo cp "$DRIVER"/src/Makefile "$DRIVER"/src/*.[ch] "$DRIVER"/dkms.conf "$DEST"/
 
 sudo dkms install "$NAME/$VERSION"
 echo uniwill-laptop | sudo tee /etc/modules-load.d/uniwill-avell.conf >/dev/null

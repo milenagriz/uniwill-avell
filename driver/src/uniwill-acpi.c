@@ -1387,9 +1387,13 @@ static umode_t uniwill_is_visible(const void *drvdata, enum hwmon_sensor_types t
  *
  * pwmN_enable follows the hwmon ABI:
  *   0 - no fan speed control, i.e. full speed (boost on)
- *   1 - manual: only pwmN = 255 (boost on) is accepted, the EC offers no
+ *   1 - manual: like gpd-fan, entering manual mode starts at full speed
+ *       (boost on). Only pwmN = 255 is accepted, the EC offers no
  *       intermediate manual speeds through this interface
  *   2 - automatic (EC fan curve, boost off)
+ *
+ * The EC is the source of truth: if boost is found off (e.g. a hotkey or the
+ * firmware cleared it), the mode reads as automatic, never as manual.
  */
 #define UNIWILL_PWM_MODE_FULL	0
 #define UNIWILL_PWM_MODE_MANUAL	1
@@ -1427,7 +1431,7 @@ static int uniwill_write(struct device *dev, enum hwmon_sensor_types type, u32 a
 			return uniwill_set_fan_boost(data, true);
 		case UNIWILL_PWM_MODE_MANUAL:
 			data->pwm_mode = val;
-			return 0;
+			return uniwill_set_fan_boost(data, true);
 		case UNIWILL_PWM_MODE_AUTO:
 			data->pwm_mode = val;
 			return uniwill_set_fan_boost(data, false);
@@ -1464,10 +1468,12 @@ static int uniwill_read(struct device *dev, enum hwmon_sensor_types type, u32 at
 
 		/* The EC is the source of truth, e.g. a hotkey may have toggled boost */
 		data->fan_boost = !!(value & FAN_MODE_BOOST);
-		if (data->pwm_mode == UNIWILL_PWM_MODE_MANUAL)
-			*val = UNIWILL_PWM_MODE_MANUAL;
-		else
-			*val = data->fan_boost ? UNIWILL_PWM_MODE_FULL : UNIWILL_PWM_MODE_AUTO;
+		if (!data->fan_boost)
+			data->pwm_mode = UNIWILL_PWM_MODE_AUTO;
+		else if (data->pwm_mode != UNIWILL_PWM_MODE_MANUAL)
+			data->pwm_mode = UNIWILL_PWM_MODE_FULL;
+
+		*val = data->pwm_mode;
 
 		return 0;
 	}
@@ -3546,4 +3552,4 @@ module_exit(uniwill_exit);
 MODULE_AUTHOR("Armin Wolf <W_Armin@gmx.de>");
 MODULE_DESCRIPTION("Uniwill notebook driver");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("7.2.15-avell1");
+MODULE_VERSION("7.2.15-avell2");

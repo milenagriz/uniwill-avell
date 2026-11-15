@@ -180,3 +180,15 @@ EC state resets on a full power-off, which is the rollback for any EC write (inf
 | A vendor BIOS update on a sibling wiped the model and serial number; one owner then reported the laptop no longer booting with Dynamic Boost enabled | inferred: owner reports, not reproduced |
 | On some older boards from this manufacturer, boot-time setting changes lasted only one boot | inferred: owner reports |
 | A sibling board of the same era used a leadless flash package that a clip cannot grip | inferred: the chip on this board is **unknown** until checked by eye (#19) |
+
+## 8. Fan mode reporting (#3)
+
+Before, writing `pwmN_enable = 1` only recorded "manual"; the EC kept its own curve until `pwmN = 255` was
+written, so the mode read `1` while the firmware was in control. Now (`7.2.15-avell2`, still in the upstreamable `patches/0003`):
+
+- Entering manual mode turns Max fan on at once, as gpd-fan does.
+- The mode read follows EC `0x0751` bit 6: bit clear reads `2` (automatic), whatever was written before.
+- Writing `2` always clears the bit.
+
+`driver/checks/fans.sh` on the device (observed): auto → manual reaches about 5800 RPM at once (`pwm1 = 255`), max → manual stays full,
+every switch back to `2` returns to the firmware curve (`pwm1` about 76), and three cycles of the Cooling widget's own sequence all pass.
