@@ -11,6 +11,8 @@ trait Control {
     fn set_fan(&self, mode: &str, percent: u32) -> zbus::Result<()>;
     fn set_keyboard_brightness(&self, level: u32) -> zbus::Result<()>;
     fn set_keyboard_color(&self, red: u8, green: u8, blue: u8) -> zbus::Result<()>;
+    fn set_charging_profile(&self, profile: &str) -> zbus::Result<()>;
+    fn set_charge_cap(&self, percent: u32) -> zbus::Result<()>;
     fn get_config(&self) -> zbus::Result<String>;
     fn set_config(&self, toml: &str) -> zbus::Result<()>;
 }
@@ -50,6 +52,16 @@ impl Client {
     /// Sets the keyboard backlight's colour: red, green, blue, each 0-255.
     pub async fn set_keyboard_color(&self, rgb: [u8; 3]) -> anyhow::Result<()> {
         Ok(self.proxy.set_keyboard_color(rgb[0], rgb[1], rgb[2]).await?)
+    }
+
+    /// Sets the firmware's charging profile: "high-capacity", "balanced" or "stationary".
+    pub async fn set_charging_profile(&self, profile: &str) -> anyhow::Result<()> {
+        Ok(self.proxy.set_charging_profile(profile).await?)
+    }
+
+    /// Caps the charge level, in percent.
+    pub async fn set_charge_cap(&self, percent: u32) -> anyhow::Result<()> {
+        Ok(self.proxy.set_charge_cap(percent).await?)
     }
 
     /// The configuration in force, as TOML.

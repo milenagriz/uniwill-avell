@@ -20,7 +20,7 @@ pub struct Status {
     pub backlight: Backlight,
     /// Features this machine's driver does not expose (not yet verified on this board, or the
     /// stock kernel driver is loaded): "temperatures", "fan_control", "tgp_offset", "gpu_state",
-    /// "battery", "cpu_power_limits", "keyboard_backlight".
+    /// "battery", "charging_profile", "charge_cap", "cpu_power_limits", "keyboard_backlight".
     pub unavailable: Vec<String>,
 }
 
@@ -48,6 +48,12 @@ pub struct Battery {
     pub cycle_count: Option<u32>,
     /// Full-charge capacity as a share of the design capacity.
     pub health_percent: Option<u32>,
+    /// The firmware's charging profile: "high-capacity", "balanced" or "stationary".
+    #[serde(default)]
+    pub charging_profile: Option<String>,
+    /// The level charging stops at, in percent.
+    #[serde(default)]
+    pub charge_cap_percent: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -137,11 +143,44 @@ fn battery(fs: &Sysfs<'_>) -> Battery {
             (Some(f), Some(d)) if d > 0 => Some((f * 100 / d) as u32),
             _ => None,
         },
+        charging_profile: fs.read(&b("charge_types")).and_then(|types| {
+            let selected = types.split_whitespace().find_map(|t| t.strip_prefix('[')?.strip_suffix(']'))?;
+            CHARGING_PROFILES.iter().find(|(_, kernel)| *kernel == selected).map(|(name, _)| name.to_string())
+        }),
+        charge_cap_percent: fs.read_num(&b("charge_control_end_threshold")),
     }
 }
 
+/// The firmware's charging profiles, and the kernel's charge type each one is.
+const CHARGING_PROFILES: [(&str, &str); 3] = [("high-capacity", "Standard"), ("balanced", "Long_Life"), ("stationary", "Trickle")];
+/// Below this a cap would leave the laptop close to useless off the charger.
+const MIN_CHARGE_CAP: u32 = 20;
+
+fn not_exposed(what: &str) -> anyhow::Error {
+    anyhow::anyhow!("{what} is not exposed by the driver on this machine")
+}
+
+/// Sets the firmware's charging profile through the battery's `charge_types`.
+pub fn set_charging_profile(port: &Port, profile: &str) -> anyhow::Result<()> {
+    let fs = Sysfs::new(&port.root);
+    let file = format!("{BATTERY}/charge_types");
+    anyhow::ensure!(fs.exists(&file), not_exposed("the charging profile"));
+    let (_, kernel) = CHARGING_PROFILES.iter().find(|(name, _)| *name == profile)
+        .ok_or_else(|| anyhow::anyhow!("unknown charging profile {profile:?}: high-capacity, balanced or stationary"))?;
+    fs.write(&file, kernel)
+}
+
+/// Caps the charge level through the battery's `charge_control_end_threshold`.
+pub fn set_charge_cap(port: &Port, percent: u32) -> anyhow::Result<()> {
+    let fs = Sysfs::new(&port.root);
+    let file = format!("{BATTERY}/charge_control_end_threshold");
+    anyhow::ensure!(fs.exists(&file), not_exposed("the charge cap"));
+    anyhow::ensure!((MIN_CHARGE_CAP..=100).contains(&percent), "the charge cap is {MIN_CHARGE_CAP} to 100 percent, not {percent}");
+    fs.write(&file, &percent.to_string())
+}
+
 fn no_backlight() -> anyhow::Error {
-    anyhow::anyhow!("the keyboard backlight is not exposed by the driver on this machine")
+    not_exposed("the keyboard backlight")
 }
 
 /// Sets the keyboard backlight's brightness level, from 0 (off) to the keyboard's maximum.
@@ -215,6 +254,8 @@ pub async fn read(port: &Port) -> anyhow::Result<Status> {
         ("tgp_offset", s.gpu.tgp_offset_w.is_none()),
         ("gpu_state", s.gpu.state == "unknown"),
         ("battery", s.battery.capacity_percent.is_none()),
+        ("charging_profile", s.battery.charging_profile.is_none()),
+        ("charge_cap", s.battery.charge_cap_percent.is_none()),
         ("cpu_power_limits", s.cpu.long_term_w.is_none()),
         ("keyboard_backlight", s.backlight.brightness.is_none()),
     ];

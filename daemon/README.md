@@ -22,6 +22,8 @@
 | `SetFan(s, u)` | the active local desktop user | Who runs the fans: `curve`, `fixed` (with a percentage), `max` or `automatic`. Lasts until the next call or a restart |
 | `SetKeyboardBrightness(u)` | the active local desktop user | The keyboard backlight's level, 0 (off) to the keyboard's maximum (4 here) |
 | `SetKeyboardColor(y, y, y)` | the active local desktop user | Red, green, blue, each 0-255, scaled to what the keyboard takes (0-50 here) |
+| `SetChargingProfile(s)` | the active local desktop user | The firmware's charging profile: `high-capacity`, `balanced` or `stationary` (the battery's `charge_types`: Standard, Long_Life, Trickle) |
+| `SetChargeCap(u)` | the active local desktop user | Stop charging at this level, 20-100 percent (the battery's `charge_control_end_threshold`) |
 | `GetConfig() → s` | anyone | The configuration in force, as TOML |
 | `SetConfig(s)` | the active local desktop user | Replaces the configuration (TOML). Invalid: refused with the reason, the previous one stays. Valid: saved and applied at once |
 
@@ -33,6 +35,7 @@ No password prompt. `dist/org.avell.Control1.conf` lets only root own the name a
 ```
 avellctl [--json] status | profile | profile set <name> | fan | fan set <curve|automatic|max|percent>
          | keyboard | keyboard brightness <level> | keyboard color <#rrggbb>
+         | battery | battery profile <name> | battery cap <percent>
          | config | config set <key> <value>
 ```
 
@@ -120,6 +123,12 @@ next call or a restart of the daemon; `fans.mode` in the configuration decides w
 automatic are set once and then left alone. Max fan turned on by someone else (the Fn key, `pwm1_enable = 0`) is left on
 until it is released. A program that drives the fans through `pwm1_enable = 1` and `pwmN` itself is overwritten within
 2 s under `curve` and `fixed`: use `automatic` for that. A clean stop leaves the fans on automatic.
+
+## Battery care
+
+The charging profile and the charge cap go through the standard battery files. Until the driver exposes them for this board
+(each is enabled only after it is verified on the device, see `docs/INVESTIGATION.md` section 14) the status lists them as
+unavailable and setting them fails with a message saying so.
 
 ## Tests
 

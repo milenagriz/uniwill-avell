@@ -98,6 +98,28 @@ impl Control {
         crate::status::set_keyboard_color(self.daemon.port(), [red, green, blue]).map_err(failed)
     }
 
+    /// Sets the firmware's charging profile: "high-capacity", "balanced" or "stationary".
+    async fn set_charging_profile(
+        &self,
+        profile: &str,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        self.authorize(conn, &hdr).await?;
+        crate::status::set_charging_profile(self.daemon.port(), profile).map_err(failed)
+    }
+
+    /// Caps the charge level, in percent (20-100; 100 is no cap).
+    async fn set_charge_cap(
+        &self,
+        percent: u32,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        self.authorize(conn, &hdr).await?;
+        crate::status::set_charge_cap(self.daemon.port(), percent).map_err(failed)
+    }
+
     /// The configuration in force, as TOML.
     async fn get_config(&self) -> zbus::fdo::Result<String> {
         self.daemon.config().await.map_err(failed)

@@ -17,6 +17,9 @@ commands:
                          0 (off) up to the keyboard's maximum
   keyboard color <#rrggbb>
                          or three numbers: red green blue, each 0-255
+  battery                charge, health, charging profile and charge cap
+  battery profile <name> high-capacity, balanced or stationary
+  battery cap <percent>  stop charging at this level (20-100)
   config                 the configuration in force (TOML)
   config set <key> <value>
                          change one setting, e.g. profiles.balanced.tgp_offset_w 15
@@ -42,6 +45,12 @@ fn fans_line(s: &Status) -> String {
         (_, m) => format!(" (driver: {})", m.unwrap_or("unavailable")),
     };
     format!("{control}{driver}  {}", if fans.is_empty() { "unavailable".into() } else { fans.join("  ") })
+}
+
+fn battery_line(b: &avell::status::Battery) -> String {
+    format!("{}  {}  {}  cycles {}  health {}  charging profile {}  charge cap {}", opt(&b.capacity_percent, "%"), opt(&b.state, ""),
+            match b.on_ac { Some(true) => "on AC", Some(false) => "on battery", None => "power source unavailable" },
+            opt(&b.cycle_count, ""), opt(&b.health_percent, "%"), opt(&b.charging_profile, ""), opt(&b.charge_cap_percent, "%"))
 }
 
 fn keyboard_line(k: &avell::status::Backlight) -> String {
@@ -78,10 +87,7 @@ fn print_status(s: &Status) {
     };
     println!("GPU              {}  TGP offset {}{}", g.state, opt(&g.tgp_offset_w, " W"), power);
     println!("CPU limits       long-term {}  short-term {}", opt(&s.cpu.long_term_w, " W"), opt(&s.cpu.short_term_w, " W"));
-    let b = &s.battery;
-    println!("Battery          {}  {}  {}  cycles {}  health {}", opt(&b.capacity_percent, "%"), opt(&b.state, ""),
-             match b.on_ac { Some(true) => "on AC", Some(false) => "on battery", None => "power source unavailable" },
-             opt(&b.cycle_count, ""), opt(&b.health_percent, "%"));
+    println!("Battery          {}", battery_line(&s.battery));
     println!("Keyboard         {}", keyboard_line(&s.backlight));
     if !s.unavailable.is_empty() {
         println!("Unavailable      {} (not exposed by the driver on this machine)", s.unavailable.join(", "));
@@ -160,6 +166,19 @@ async fn run(json: bool, args: &[String]) -> anyhow::Result<()> {
         ["keyboard", "color" | "colour", color @ ..] => {
             client.set_keyboard_color(parse_color(color)?).await.map_err(explain)?;
             if json { println!("{}", serde_json::to_string_pretty(&client.status().await.map_err(explain)?.backlight)?) }
+        }
+        ["battery"] => {
+            let b = client.status().await.map_err(explain)?.battery;
+            if json { println!("{}", serde_json::to_string_pretty(&b)?) } else { println!("{}", battery_line(&b)) }
+        }
+        ["battery", "profile", name] => {
+            client.set_charging_profile(name).await.map_err(explain)?;
+            if json { println!("{}", serde_json::to_string_pretty(&client.status().await.map_err(explain)?.battery)?) }
+        }
+        ["battery", "cap", percent] => {
+            let percent = percent.parse().map_err(|_| anyhow::anyhow!("the charge cap is a percentage, not {percent:?}"))?;
+            client.set_charge_cap(percent).await.map_err(explain)?;
+            if json { println!("{}", serde_json::to_string_pretty(&client.status().await.map_err(explain)?.battery)?) }
         }
         ["config"] => {
             let text = client.config().await.map_err(explain)?;
