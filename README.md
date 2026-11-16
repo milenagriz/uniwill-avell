@@ -56,13 +56,14 @@ To get clangd working in an editor, generate `driver/src/compile_commands.json` 
 ## Install
 
 ```bash
-scripts/install.sh          # copies driver/ to /usr/src, installs with DKMS, loads it at boot, swaps the running module
+scripts/install.sh          # driver (DKMS, loaded at boot, running module swapped), avelld + avellctl, and on Omarchy the bar plugin and the app
 driver/checks/fans.sh       # the fan mode contract and the Cooling widget's Max button, ends on automatic
 driver/checks/direct-fan.sh # manual duties, Max fan override and the watchdog (about 1.5 min)
 driver/checks/daemon-fans.sh # avelld's fan control: curve, watchdog fallback and recovery, fixed, Max fan, automatic (about 1 min)
 ```
 
-Requires `dkms` and the headers for the running kernel (`linux-omarchy-headers`).
+Requires `dkms` and the headers for the running kernel (`linux-omarchy-headers`); the app needs `qmake6` (`qt6-base`).
+Run it as your own user: it uses sudo for the system parts and links the bar plugin into your `~/.config/omarchy/plugins`.
 
 ## Remove
 

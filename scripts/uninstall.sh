@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
-# Remove the control stack: the daemon, its service, D-Bus policy and CLI, then the patched driver; the kernel's own uniwill-laptop stays (it will not auto-load on this board).
+# Remove the control stack: the Avell Control app and the bar plugin, the daemon, its service, D-Bus policy and CLI, then the patched driver; the kernel's own uniwill-laptop stays (it will not auto-load on this board).
 set -euo pipefail
+
+# The interfaces first: they are clients of the daemon
+for pkg in avell-control avell-control-debug; do
+  if pacman -Q "$pkg" >/dev/null 2>&1; then sudo pacman -R --noconfirm "$pkg"; fi
+done
+if command -v omarchy >/dev/null; then
+  omarchy plugin disable avell.control 2>/dev/null || true
+fi
+link=$HOME/.config/omarchy/plugins/avell.control
+if [ -L "$link" ]; then rm -f "$link"; fi
 
 NAME=uniwill-avell
 VERSION=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' "$(dirname "$0")/../driver/dkms.conf")

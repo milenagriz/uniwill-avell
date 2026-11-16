@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install the Avell A52 MOB control stack: the patched uniwill-laptop driver (DKMS),
-# the avelld daemon with its systemd service and D-Bus policy, and the avellctl CLI.
+# the avelld daemon with its systemd service and D-Bus policy, the avellctl CLI, and on
+# Omarchy the bar plugin and the Avell Control app. Run it as your own user (it uses sudo).
 set -euo pipefail
 
 NAME=uniwill-avell
@@ -52,3 +53,22 @@ sudo systemctl daemon-reload
 sudo systemctl enable avelld.service
 sudo systemctl restart avelld.service
 echo "avelld $(systemctl is-active avelld.service), avellctl in /usr/local/bin"
+
+# The bar plugin, linked from the repository into the Omarchy shell's plugin folder
+if command -v omarchy >/dev/null; then
+  plugins=$HOME/.config/omarchy/plugins
+  mkdir -p "$plugins"
+  [ -L "$plugins/avell.control" ] || ln -s "$REPO/bar-plugin" "$plugins/avell.control"
+  omarchy plugin list | grep -q '^avell\.control .*enabled' || omarchy plugin enable avell.control
+  echo "Bar plugin avell.control enabled (after later edits to its files: omarchy restart shell)"
+else
+  echo "Omarchy not found: bar plugin skipped (see bar-plugin/README.md)"
+fi
+
+# The control centre, built and installed as a pacman package
+if command -v makepkg >/dev/null && command -v qmake6 >/dev/null; then
+  "$REPO/app/bin/install" --noconfirm
+  echo "Avell Control $(pacman -Q avell-control | cut -d' ' -f2) installed"
+else
+  echo "makepkg or qmake6 not found: Avell Control skipped (see app/README.md)"
+fi

@@ -35,7 +35,7 @@ omarchy-shell avell.control toggleMaxFan
 
 ## Install
 
-Needs `avellctl` on the PATH (`scripts/install.sh` installs it to `/usr/local/bin`).
+`scripts/install.sh` does all of this (and installs `avellctl`, which the plugin needs on the PATH). By hand:
 
 ```sh
 ln -s "$PWD/bar-plugin" ~/.config/omarchy/plugins/avell.control   # or copy the folder there
