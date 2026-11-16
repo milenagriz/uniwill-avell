@@ -435,3 +435,38 @@ when the target reaches 100% the driver turns Max fan on at once, after which th
 The built-in performance curve reached 100% at 80 °C, which a compile already triggered. Owner decision (2026-11-15): the
 curve now reaches 100% at 90 °C (`[[45, 35], [55, 50], [65, 65], [80, 85], [90, 100]]`) and the daemon averages the CPU temperature over its last
 3 readings (6 s), so a single-reading spike moves the target by a third of its size.
+
+## 18. BIOS: memory and NVMe settings (owner question, read only)
+
+Read from the forms and NVAR stores of `evidence/bios/bios-N.1.05AVE04-20261115.bin` with `bios/analyze.py`'s parser, and
+from the running system (`dmidecode`, `decode-dimms`, `lspci -vvv`, `nvme id-ctrl`). Nothing was written.
+
+**Memory, observed.** Two A-DATA AD4S320038G22-BHYD modules (8 GiB, single rank, SK Hynix chips), one per controller, at
+DDR4-3200 22-22-22-52, 1.2 V. The SPD holds only the JEDEC table (fastest 3200 at CL22; no XMP section was decoded, and
+only the module at 0x50 was reachable through `ee1004`). The BIOS runs them at exactly their rating.
+
+| Setting | Form (visible?) | Variable | Current |
+|---|---|---|---|
+| Memory profile (Default, Custom, XMP 1, XMP 2) | Memory Overclocking Menu, linked only from the unlinked OEM page `0x2712` ("GCU - OverClock Recovery") | `SaSetup[0x13b]` | 0, Default |
+| Memory Ratio, Reference Clock, tCL, tRCD/tRP, tRAS, tCWL, tFAW, tREFI, tRFC, tRTP, tWR, tWTR, NMode, Memory Voltage | same menu, greyed unless Custom | `SaSetup[0x0e]`, `[0x0c]`, `[0x10]`, `[0x16]`, `[0x14]`, `[0x11]`, ... `[0x03]` | the SPD timings (22, 22, 52, 20, ...) |
+| DRAM Gear Mode (Auto, Gear1, Gear2) | `0x2712` (unlinked) | `SaSetup[0x18a]` | 0, Auto |
+| SA GV (dynamic memory frequency) | Chipset > SA > Memory Configuration (linked) | `SaSetup[0x17d]` | 0, Disabled |
+| Maximum Memory Frequency | same | `SaSetup[0x139]` | 0, Auto |
+| Memory Test on Warm Boot, Fast Boot | same | `SaSetup[0x14e]`, `[0x13d]` | 1, 1 |
+
+Inferred: XMP has nothing to load on these modules, and the only gain left is tighter timings by hand (Custom profile),
+which needs memory overclocking to be allowed on this CPU and chipset (unknown: no primary source found, and the
+overclocking lock of #20 may also block it). SA GV disabled keeps the memory at full speed at idle, which costs a little
+battery; enabling it would be a boot-time variable change (human-only, ADR-0002), not tried.
+
+**NVMe, observed.** The SSD (NX-1TB 2280, Realtek RTS5772DL, DRAM-less with a 64 MiB host memory buffer, PCIe 4.0 x4) sits on
+the chipset root port `00:1d.0` (PCH root port 9), which is PCIe 3.0: the link runs 8 GT/s x4 ("downgraded"). The BIOS
+offers Gen4 only on the CPU root ports (`SaSetup` forms `0x27a2`-`0x27a5`); the chipset ports top out at Gen3
+(`PchSetup[0x251]`, 0 = Auto). So no setting gives this slot Gen4. Whether the board has a second, CPU-attached M.2 slot
+is unknown: the ACPI tables declare `PEG2` (`00:06.0`), but they are Intel's reference tables (`TglH_Rvp`), so only a
+look under the cover settles it.
+
+Power: the root port has ASPM L1 and L1.1/L1.2 enabled (`PchSetup[0x281]` = 2, L1.1 and L1.2), but `lspci` shows ASPM
+disabled and L1 substates off on the SSD's side of the link, while the kernel's `link/` files for `03:00.0` read 1.
+APST is on and allows the deepest power state (`default_ps_max_latency_us` = 100000). The VMD controller (`00:0e.0`)
+is enabled in the second NVAR store with no root port mapped under it; the SSD is attached directly.
