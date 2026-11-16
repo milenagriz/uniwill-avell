@@ -74,7 +74,7 @@ impl Default for Profiles {
             power_saver: b(0, false, 20, 30, &[[50, 20], [65, 35], [75, 50], [85, 75], [92, 100]]),
             balanced: b(10, true, 45, 65, &[[50, 30], [60, 40], [70, 60], [80, 80], [88, 100]]),
             // the firmware table's own limits for this machine
-            performance: b(20, true, 80, 80, &[[45, 35], [55, 50], [65, 70], [75, 90], [80, 100]]),
+            performance: b(20, true, 80, 80, &[[45, 35], [55, 50], [65, 65], [80, 85], [90, 100]]),
         }
     }
 }

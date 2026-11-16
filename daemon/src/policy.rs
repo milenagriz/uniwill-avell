@@ -30,11 +30,34 @@ pub fn curve_percent(curve: &Curve, temp_c: i64) -> u32 {
     (f64::from(p0) + share * (f64::from(p1) - f64::from(p0))).round() as u32
 }
 
+/// How many CPU readings the fan curve averages: the CPU sensor jumps by 10 °C and more for a
+/// single reading, which alone would spin the fans up and, through the hysteresis, keep them up.
+pub const CPU_SAMPLES: usize = 3;
+
 /// What the fan curve remembers between readings.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FanState {
     /// The temperature the current speed was chosen for.
     held_c: Option<i64>,
+    /// The last CPU readings, newest at `cpu_next - 1`, and how many there are (up to all of them).
+    cpu: [i64; CPU_SAMPLES],
+    cpu_next: usize,
+    cpu_count: usize,
+}
+
+impl FanState {
+    /// For a new curve: the speed is chosen afresh, the CPU readings are kept.
+    pub fn new_curve(&mut self) {
+        self.held_c = None;
+    }
+}
+
+/// Adds a CPU reading and returns the average of the last `CPU_SAMPLES` (fewer at the start).
+pub fn cpu_average(state: &mut FanState, reading: i64) -> i64 {
+    state.cpu[state.cpu_next] = reading;
+    state.cpu_next = (state.cpu_next + 1) % CPU_SAMPLES;
+    state.cpu_count = (state.cpu_count + 1).min(CPU_SAMPLES);
+    state.cpu[..state.cpu_count].iter().sum::<i64>() / state.cpu_count as i64
 }
 
 /// The fan speed in percent for a temperature. Warming is followed at once; cooling only once

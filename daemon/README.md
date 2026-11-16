@@ -7,7 +7,7 @@
 | `port` | The system port: kernel control files under a root, the power-profile service, the GPU probe, the clock, desktop sessions, the service manager, the configuration file |
 | `real` | The real port: `/`, power-profiles-daemon, `nvidia-smi` (only when the card is already awake), logind, systemd, `/etc/avelld/config.toml` |
 | `config` | The configuration: one bundle per Power profile, and its validation |
-| `policy` | Pure decisions, no I/O and no clock: the fan speed for a temperature along a curve with hysteresis, the TGP offset for the power source, and when game detection holds and releases |
+| `policy` | Pure decisions, no I/O and no clock: the fan speed for a temperature along a curve with hysteresis (the CPU temperature averaged over its last 3 readings), the TGP offset for the power source, and when game detection holds and releases |
 | `engine` | One task that owns the state: every second it reads the active Power profile and applies its bundle when the profile changed or the machine resumed; every 2 s it writes the fan duty |
 | `status` | The machine state, read through the port |
 | `api` | The control API, `org.avell.Control1` at `/org/avell/Control1` on the system bus |
@@ -86,7 +86,7 @@ tgp_offset_w = 20
 dynamic_boost = true
 cpu_long_term_w = 80
 cpu_short_term_w = 80
-fan_curve = [[45, 35], [55, 50], [65, 70], [75, 90], [80, 100]]
+fan_curve = [[45, 35], [55, 50], [65, 65], [80, 85], [90, 100]]
 ```
 
 A file may leave settings out; they keep the values above.
@@ -113,7 +113,8 @@ with `avellctl config set game_detection.enabled false`.
 
 ## Fans
 
-The daemon computes the fan speed (ADR-0001): the hotter of the CPU and GPU temperature, along the active profile's
+The daemon computes the fan speed (ADR-0001): the hotter of the CPU temperature, averaged over its last 3 readings (6 s,
+because the CPU sensor jumps by 15-20 °C for a single reading), and the GPU temperature, along the active profile's
 `fan_curve` (linear between points, flat before the first and after the last), with hysteresis. It writes the duty to both
 fans every 2 s, changed or not, so the driver's 5 s watchdog returns the fans to the firmware if the daemon hangs; when the
 daemon finds the fans on automatic (the watchdog fired, or the machine resumed) it takes them back. The EC moves the
@@ -123,7 +124,8 @@ fans towards a new duty at about 1% per second (ADR-0003), and the driver forces
 next call or a restart of the daemon; `fans.mode` in the configuration decides what a start begins with. Max fan and
 automatic are set once and then left alone. Max fan turned on by someone else (the Fn key, `pwm1_enable = 0`) is left on
 until it is released. A program that drives the fans through `pwm1_enable = 1` and `pwmN` itself is overwritten within
-2 s under `curve` and `fixed`: use `automatic` for that. A clean stop leaves the fans on automatic.
+2 s under `curve` and `fixed`: use `automatic` for that. This includes the old Cooling widget's Max fan sequence; the bar
+plugin's Max fan button and `avellctl fan set max` are the way to Max fan. A clean stop leaves the fans on automatic.
 
 ## Battery care
 

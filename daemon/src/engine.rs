@@ -339,9 +339,10 @@ impl Engine {
             FanControl::Automatic | FanControl::Max => return,
             FanControl::Fixed(percent) => percent,
             FanControl::Curve => {
-                let temps = [1, 2].map(|n| fs.read_num::<i64>(&format!("{hwmon}/temp{n}_input")));
+                let [cpu, gpu] = [1, 2].map(|n| fs.read_num::<i64>(&format!("{hwmon}/temp{n}_input")));
+                let cpu = cpu.map(|t| policy::cpu_average(&mut self.fan_state, t));
                 let (Some(hottest), Some(bundle)) =
-                    (temps.into_iter().flatten().max(), self.applied.as_deref().and_then(|p| self.config.bundle(p)))
+                    (cpu.max(gpu), self.applied.as_deref().and_then(|p| self.config.bundle(p)))
                 else {
                     return; // nothing to go by: the watchdog leaves the fans to the firmware
                 };
@@ -390,7 +391,7 @@ impl Engine {
             eprintln!("avelld: Dynamic Boost ({DYNAMIC_BOOST_UNIT}): {e:#}");
         }
         // a new curve starts afresh
-        self.fan_state = policy::FanState::default();
+        self.fan_state.new_curve();
         self.fan_beat();
     }
 

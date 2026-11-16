@@ -408,7 +408,8 @@ stop leaves 2.
 The Cooling widget's own sequence (`pwm1_enable` = 1, `pwm1` = 255) cannot be told apart from the daemon's writes, because the
 driver's `pwmN` reads the EC's present duty and not the last value written. Under `curve` and `fixed` the daemon therefore
 overwrites it within 2 s; under `automatic` the widget works as before. The widget is not installed on this machine at the
-moment, so this was not observed.
+moment, so this was not observed. Owner decision (2026-11-15): accepted, no driver change; the bar plugin's Max fan button
+and `avellctl fan set max` replace the widget.
 
 ## 17. Game detection (#11) and charger rules (#10)
 
@@ -431,4 +432,6 @@ Charger rules are covered by the automated tests only so far: observing them nee
 Fan curve note from the same run: on this machine the CPU temperature jumps by 15-20 °C within a sample (52 → 73 → 52 °C), so the
 curve's target moves a lot (33% to 88% within 10 s after the load). The EC's slow slew (ADR-0003) smooths what the fans do, and
 when the target reaches 100% the driver turns Max fan on at once, after which the fans take about two minutes to come down.
-The built-in performance curve reaches 100% at 80 °C, which a compile already triggers.
+The built-in performance curve reached 100% at 80 °C, which a compile already triggered. Owner decision (2026-11-15): the
+curve now reaches 100% at 90 °C (`[[45, 35], [55, 50], [65, 65], [80, 85], [90, 100]]`) and the daemon averages the CPU temperature over its last
+3 readings (6 s), so a single-reading spike moves the target by a third of its size.

@@ -20,47 +20,62 @@ fn duties(rig: &Rig) -> (String, String, String) {
 async fn fan_speed_follows_the_curve_at_the_hotter_of_the_two_temperatures() {
     let rig = Rig::start().await;
 
-    set_temps(&rig, 60, 80); // the GPU is hotter: 80 °C is 80 %
-    rig.advance(BEAT).await;
+    hold_temps(&rig, 60, 80).await; // the GPU is hotter: 80 °C is 80 %
     assert_eq!(duties(&rig), ("1".into(), "204".into(), "204".into()));
 
-    set_temps(&rig, 90, 80); // now the CPU is: 100 %
-    rig.advance(BEAT).await;
+    hold_temps(&rig, 90, 80).await; // now the CPU is: 100 %
     assert_eq!(duties(&rig), ("1".into(), "255".into(), "255".into()));
 
-    set_temps(&rig, 40, 30); // below the first point: its speed, 20 %
-    rig.advance(BEAT).await;
+    hold_temps(&rig, 40, 30).await; // below the first point: its speed, 20 %
     assert_eq!(duties(&rig), ("1".into(), "51".into(), "51".into()));
+}
+
+/// Holds the temperatures for as many beats as the CPU average spans (3), so it reaches them.
+async fn hold_temps(rig: &Rig, cpu_c: u32, gpu_c: u32) {
+    set_temps(rig, cpu_c, gpu_c);
+    for _ in 0..3 {
+        rig.advance(BEAT).await;
+    }
+}
+
+#[tokio::test]
+async fn a_short_cpu_spike_moves_the_fans_only_by_its_share_of_the_average() {
+    let rig = Rig::start().await;
+    hold_temps(&rig, 58, 45).await;
+    assert_eq!(duties(&rig).1, "92"); // 58 °C is 36 %
+
+    set_temps(&rig, 88, 45); // one reading 30 °C up: the average of 58, 58 and 88 is 68 °C, 56 %
+    rig.advance(BEAT).await;
+    assert_eq!(duties(&rig).1, "143");
+
+    // gone again: once it has left the average, the curve is back at 58 °C
+    hold_temps(&rig, 58, 45).await;
+    assert_eq!(duties(&rig).1, "92");
 }
 
 #[tokio::test]
 async fn hysteresis_keeps_the_fans_from_hunting_around_a_temperature() {
     let rig = Rig::start().await;
-    set_temps(&rig, 80, 40);
-    rig.advance(BEAT).await;
+    hold_temps(&rig, 80, 40).await;
     assert_eq!(duties(&rig).1, "204"); // 80 %
 
     // cooling by less than the hysteresis changes nothing
     for cpu in [78, 76, 79, 76] {
-        set_temps(&rig, cpu, 40);
-        rig.advance(BEAT).await;
+        hold_temps(&rig, cpu, 40).await;
         assert_eq!(duties(&rig).1, "204", "at {cpu} °C");
     }
-    // cooling by more does: 70 °C is 60 %
-    set_temps(&rig, 70, 40);
-    rig.advance(BEAT).await;
-    assert_eq!(duties(&rig).1, "153");
-    // and warming is followed at once: 75 °C is 70 %
-    set_temps(&rig, 75, 40);
-    rig.advance(BEAT).await;
+    // cooling by more does: 65 °C is 50 %
+    hold_temps(&rig, 65, 40).await;
+    assert_eq!(duties(&rig).1, "128");
+    // and warming is followed as the average rises: 75 °C is 70 %
+    hold_temps(&rig, 75, 40).await;
     assert_eq!(duties(&rig).1, "179");
 }
 
 #[tokio::test]
 async fn switching_the_power_profile_switches_the_curve() {
     let rig = Rig::start().await;
-    set_temps(&rig, 60, 40);
-    rig.advance(BEAT).await;
+    hold_temps(&rig, 60, 40).await;
     assert_eq!(duties(&rig).1, "102"); // performance: 60 °C is 40 %
 
     rig.client.set_profile("power-saver").await.unwrap();
