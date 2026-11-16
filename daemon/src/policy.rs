@@ -1,6 +1,12 @@
 //! The policy: what the machine should be doing, computed from what the daemon knows. Pure: no
 //! I/O and no clock, so the engine feeds it readings and writes out what it returns.
 
+/// The TGP offset to set: the bundle's on AC, none on battery, where the graphics card would
+/// only drain it faster.
+pub fn tgp_offset_w(bundle_w: u32, on_ac: Option<bool>) -> u32 {
+    if on_ac == Some(false) { 0 } else { bundle_w }
+}
+
 /// A fan curve: (temperature in °C, fan speed in percent) points, by rising temperature.
 pub type Curve = [[u32; 2]];
 

@@ -256,6 +256,11 @@ pub const TEST_CONFIG: &str = r#"
 [fans]
 hysteresis_c = 5
 
+[charger]
+enabled = true
+on_ac = "performance"
+on_battery = "power-saver"
+
 [profiles.power-saver]
 tgp_offset_w = 0
 dynamic_boost = false

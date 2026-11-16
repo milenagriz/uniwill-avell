@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::config::{Config, FanMode};
 use crate::policy;
 use crate::port::Port;
-use crate::status::{self, PLATFORM, RAPL, Status};
+use crate::status::{self, AC, PLATFORM, RAPL, Status};
 use crate::sysfs::Sysfs;
 
 const TICK: Duration = Duration::from_secs(1);
@@ -138,6 +138,8 @@ struct Engine {
     config: Config,
     /// The profile whose bundle was applied last.
     applied: Option<String>,
+    /// The power source at the last tick: on AC or on battery.
+    on_ac: Option<bool>,
     /// How far boot time is ahead of monotonic time; it grows by the length of every suspend.
     suspended: Duration,
     /// The CPU power limits as they were when the daemon started.
@@ -185,16 +187,51 @@ impl Engine {
         self.port.clock.boot_time().saturating_sub(self.port.clock.now())
     }
 
+    fn read_on_ac(&self) -> Option<bool> {
+        Sysfs::new(&self.port.root).read(&format!("{AC}/online")).map(|v| v == "1")
+    }
+
+    /// A manual choice of profile becomes the one for the power source in use.
+    fn remember_choice(&mut self, profile: &str) {
+        let (true, Some(on_ac)) = (self.config.charger.enabled, self.read_on_ac()) else { return };
+        if self.config.charger.profile(on_ac) == profile || self.config.bundle(profile).is_none() {
+            return;
+        }
+        let slot = if on_ac { &mut self.config.charger.on_ac } else { &mut self.config.charger.on_battery };
+        *slot = profile.to_string();
+        if let Err(e) = save(&self.port.config_path, &self.config.to_toml()) {
+            eprintln!("avelld: saving {}: {e}", self.port.config_path.display());
+        }
+    }
+
     async fn tick(&mut self) {
-        let profile = match self.port.profiles.active().await {
+        let mut profile = match self.port.profiles.active().await {
             Ok(p) => p,
             Err(e) => return eprintln!("avelld: reading the Power profile: {e:#}"),
         };
+        let on_ac = self.read_on_ac();
+        let source_changed = on_ac != self.on_ac;
+        self.on_ac = on_ac;
+        if source_changed {
+            // the charger rules: each power source has its profile
+            if let (true, Some(on_ac)) = (self.config.charger.enabled, on_ac) {
+                let wanted = self.config.charger.profile(on_ac).to_string();
+                if wanted != profile {
+                    match self.port.profiles.set_active(&wanted).await {
+                        Ok(()) => profile = wanted,
+                        Err(e) => eprintln!("avelld: setting the Power profile {wanted:?}: {e:#}"),
+                    }
+                }
+            }
+        } else if self.applied.as_deref().is_some_and(|applied| applied != profile) {
+            // changed in the power menu or with the Fn key
+            self.remember_choice(&profile);
+        }
         // the firmware resets its registers over a suspend
         let suspended = self.suspended_now();
         let resumed = suspended > self.suspended + RESUME_SLACK;
         self.suspended = suspended;
-        if resumed || self.applied.as_deref() != Some(&profile) {
+        if resumed || source_changed || self.applied.as_deref() != Some(&profile) {
             self.apply(&profile).await;
         }
         if self.port.clock.now() >= self.next_fan_beat {
@@ -286,7 +323,7 @@ impl Engine {
             return eprintln!("avelld: no bundle for Power profile {profile:?}");
         };
         let uw = |w: u32| Some((u64::from(w) * 1_000_000).to_string());
-        self.write_power(bundle.tgp_offset_w, [uw(bundle.cpu_long_term_w), uw(bundle.cpu_short_term_w)]);
+        self.write_power(policy::tgp_offset_w(bundle.tgp_offset_w, self.read_on_ac()), [uw(bundle.cpu_long_term_w), uw(bundle.cpu_short_term_w)]);
         if let Err(e) = self.port.services.set_running(DYNAMIC_BOOST_UNIT, bundle.dynamic_boost).await {
             eprintln!("avelld: Dynamic Boost ({DYNAMIC_BOOST_UNIT}): {e:#}");
         }
@@ -351,6 +388,7 @@ impl Engine {
                     Some(Command::SetProfile(profile, reply)) => {
                         let result = self.port.profiles.set_active(&profile).await;
                         if result.is_ok() {
+                            self.remember_choice(&profile);
                             self.apply(&profile).await;
                         }
                         let _ = reply.send(result);
@@ -374,6 +412,7 @@ pub async fn start(port: Port) -> anyhow::Result<Handle> {
         firmware_cpu_limits_uw: [fs.read(&cpu_limit(0)), fs.read(&cpu_limit(1))],
         port: port.clone(),
         applied: None,
+        on_ac: None,
         suspended: Duration::ZERO,
     };
     engine.suspended = engine.suspended_now();

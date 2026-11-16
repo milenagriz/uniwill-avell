@@ -45,6 +45,11 @@ Each Power profile applies one bundle. power-profiles-daemon stays the single so
 hand and restart `avelld`):
 
 ```toml
+[charger]
+enabled = true          # false: plugging and unplugging change nothing
+on_ac = "performance"    # the profile set when the charger is plugged in
+on_battery = "power-saver"   # and when it is unplugged
+
 [fans]
 mode = "curve"          # who runs the fans from start: "curve" (the daemon) or "automatic" (the firmware)
 hysteresis_c = 4        # the fans slow down only once it is this much cooler than where they last sped up
@@ -75,6 +80,13 @@ A file may leave settings out; they keep the values above.
 
 The bundle is applied again after resume. On a clean stop the daemon sets the TGP offset to 0 and the CPU limits back to
 what they were when it started.
+
+## Charger rules
+
+When the power source changes (and at start), the daemon sets that source's profile through power-profiles-daemon. A manual
+change of profile (power menu, Fn key, `avellctl profile set`) replaces `charger.on_ac` or `charger.on_battery`, whichever
+source is in use, and is saved, so each source comes back with what was last chosen on it. On battery the TGP offset is 0
+whatever the bundle says, with the rules on or off. Turn the rules off with `avellctl config set charger.enabled false`.
 
 ## Fans
 

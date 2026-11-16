@@ -82,8 +82,33 @@ impl Default for Profiles {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    pub charger: Charger,
     pub fans: Fans,
     pub profiles: Profiles,
+}
+
+/// The charger rules: which Power profile each power source gets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Charger {
+    /// Off: plugging and unplugging change nothing.
+    pub enabled: bool,
+    /// The profile set when the charger is plugged in, and when it is unplugged. A manual change
+    /// of profile replaces the one for the power source in use.
+    pub on_ac: String,
+    pub on_battery: String,
+}
+
+impl Default for Charger {
+    fn default() -> Self {
+        Charger { enabled: true, on_ac: "performance".into(), on_battery: "power-saver".into() }
+    }
+}
+
+impl Charger {
+    pub fn profile(&self, on_ac: bool) -> &str {
+        if on_ac { &self.on_ac } else { &self.on_battery }
+    }
 }
 
 /// Lays `over` on top of `base`, table by table; anything else is replaced whole.
@@ -110,6 +135,13 @@ impl Config {
             "fans.hysteresis_c is {}: allowed are 0 to {MAX_HYSTERESIS_C} °C",
             config.fans.hysteresis_c
         );
+        for (key, profile) in [("on_ac", &config.charger.on_ac), ("on_battery", &config.charger.on_battery)] {
+            anyhow::ensure!(
+                PROFILES.contains(&profile.as_str()),
+                "charger.{key} is {profile:?}: the Power profiles are {}",
+                PROFILES.join(", ")
+            );
+        }
         for name in PROFILES {
             let b = config.bundle(name).expect("every profile has a bundle");
             anyhow::ensure!(
