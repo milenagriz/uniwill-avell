@@ -1,0 +1,21 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="AutomationPage.qml">AutomationPage.qml</file>
+        <file alias="BatteryPage.qml">BatteryPage.qml</file>
+        <file alias="Btn.qml">Btn.qml</file>
+        <file alias="Card.qml">Card.qml</file>
+        <file alias="ChoiceRow.qml">ChoiceRow.qml</file>
+        <file alias="CurveEditor.qml">CurveEditor.qml</file>
+        <file alias="FansPage.qml">FansPage.qml</file>
+        <file alias="KeyboardPage.qml">KeyboardPage.qml</file>
+        <file alias="LiveSlider.qml">LiveSlider.qml</file>
+        <file alias="Main.qml">Main.qml</file>
+        <file alias="ProfilesPage.qml">ProfilesPage.qml</file>
+        <file alias="ScrollPage.qml">ScrollPage.qml</file>
+        <file alias="SettingRow.qml">SettingRow.qml</file>
+        <file alias="StatLine.qml">StatLine.qml</file>
+        <file alias="StatusPage.qml">StatusPage.qml</file>
+        <file alias="Txt.qml">Txt.qml</file>
+        <file alias="i18n/en.json">i18n/en.json</file>
+    </qresource>
+</RCC>

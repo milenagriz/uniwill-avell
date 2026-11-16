@@ -1,0 +1,23 @@
+pkgname=avell-control
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Control centre for the Avell A52 MOB: fans, Power profiles, battery care and keyboard backlight, through avelld'
+arch=('x86_64')
+license=('MIT')
+depends=('qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-wayland')
+makedepends=('gcc' 'make')
+source=()
+sha256sums=()
+
+build() {
+  cd "$startdir/.."
+  ./bin/build
+}
+
+package() {
+  cd "$startdir/.."
+  install -Dm755 build/avell-control "$pkgdir/usr/bin/avell-control"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$startdir/avell-control.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/avell-control.svg"
+  install -Dm644 "$startdir/avell-control.desktop" "$pkgdir/usr/share/applications/avell-control.desktop"
+}

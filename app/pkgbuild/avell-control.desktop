@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Avell Control
+Comment=Fans, Power profiles, battery care and keyboard backlight of the Avell A52 MOB
+Exec=avell-control
+Icon=avell-control
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=fan;power;battery;keyboard;backlight;avell;uniwill;
+StartupWMClass=avell-control
