@@ -409,3 +409,26 @@ The Cooling widget's own sequence (`pwm1_enable` = 1, `pwm1` = 255) cannot be to
 driver's `pwmN` reads the EC's present duty and not the last value written. Under `curve` and `fixed` the daemon therefore
 overwrites it within 2 s; under `automatic` the widget works as before. The widget is not installed on this machine at the
 moment, so this was not observed.
+
+## 17. Game detection (#11) and charger rules (#10)
+
+Game detection, observed on the device: profile balanced, `release_after_s` lowered to 10 for the run, 40 s of
+`prime-run glmark2 --off-screen -b terrain` (85-90% utilisation, about 66 W):
+
+| Time | power-profiles-daemon | `avellctl status` | TGP offset |
+|---|---|---|---|
+| 5-15 s | balanced | balanced | 10 W |
+| 20-40 s | performance | performance (held: the graphics card is under sustained load) | 20 W |
+| 45 s (load ended at 40 s) | performance | still held | 20 W |
+| 50 s on | balanced | balanced | 10 W |
+
+`charger.on_ac` stayed `balanced` through the hold (a hold is not a manual choice). With the graphics card asleep the daemon
+never calls `nvidia-smi`; on this desktop the card is awake most of the time (section 8), so that is covered by the automated
+test only.
+
+Charger rules are covered by the automated tests only so far: observing them needs the charger unplugged.
+
+Fan curve note from the same run: on this machine the CPU temperature jumps by 15-20 °C within a sample (52 → 73 → 52 °C), so the
+curve's target moves a lot (33% to 88% within 10 s after the load). The EC's slow slew (ADR-0003) smooths what the fans do, and
+when the target reaches 100% the driver turns Max fan on at once, after which the fans take about two minutes to come down.
+The built-in performance curve reaches 100% at 80 °C, which a compile already triggers.

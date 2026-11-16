@@ -69,7 +69,7 @@ async fn on_battery_the_tgp_offset_is_0_whatever_the_bundle_says() {
 #[tokio::test]
 async fn with_the_rules_turned_off_the_power_source_changes_nothing() {
     let rig = Rig::start().await;
-    rig.client.set_config(&TEST_CONFIG.replacen("enabled = true", "enabled = false", 1)).await.unwrap();
+    rig.client.set_config(&TEST_CONFIG.replacen("[charger]\nenabled = true", "[charger]\nenabled = false", 1)).await.unwrap();
 
     plug(&rig, false).await;
     choose_in_the_power_menu(&rig, "balanced").await;

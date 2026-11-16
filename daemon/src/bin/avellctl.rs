@@ -40,7 +40,7 @@ fn fans_line(s: &Status) -> String {
 }
 
 fn print_status(s: &Status) {
-    println!("Power profile    {}", s.profile);
+    println!("Power profile    {}{}", s.profile, s.hold.as_ref().map(|why| format!("  (held: {why})")).unwrap_or_default());
     println!("Temperatures     CPU {}  GPU {}", opt(&s.temperatures.cpu_c, " °C"), opt(&s.temperatures.gpu_c, " °C"));
     println!("Fans             {}", fans_line(s));
     let g = &s.gpu;

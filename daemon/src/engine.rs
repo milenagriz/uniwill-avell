@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::config::{Config, FanMode};
 use crate::policy;
 use crate::port::Port;
-use crate::status::{self, AC, PLATFORM, RAPL, Status};
+use crate::status::{self, AC, GPU_RUNTIME_STATUS, PLATFORM, RAPL, Status};
 use crate::sysfs::Sysfs;
 
 const TICK: Duration = Duration::from_secs(1);
@@ -16,6 +16,11 @@ const TICK: Duration = Duration::from_secs(1);
 const FAN_BEAT: Duration = Duration::from_secs(2);
 /// The two clocks are read a moment apart: a gap growing by less than this is not a suspend.
 const RESUME_SLACK: Duration = Duration::from_millis(500);
+/// How often the graphics card's load is read while it is awake.
+const GPU_SAMPLE: Duration = Duration::from_secs(2);
+/// The profile game detection holds, and the reason it gives.
+const HOLD_PROFILE: &str = "performance";
+pub const HOLD_REASON: &str = "the graphics card is under sustained load";
 /// Dynamic Boost is on while this service runs.
 pub const DYNAMIC_BOOST_UNIT: &str = "nvidia-powerd.service";
 
@@ -140,6 +145,10 @@ struct Engine {
     applied: Option<String>,
     /// The power source at the last tick: on AC or on battery.
     on_ac: Option<bool>,
+    game: policy::Game,
+    /// The cookie of the hold on the performance profile, while there is one.
+    hold: Option<u32>,
+    next_gpu_sample: Duration,
     /// How far boot time is ahead of monotonic time; it grows by the length of every suspend.
     suspended: Duration,
     /// The CPU power limits as they were when the daemon started.
@@ -204,6 +213,43 @@ impl Engine {
         }
     }
 
+    /// Game detection: reads the graphics card's load, only when the kernel already has the card
+    /// awake, and holds or releases the performance profile as the policy says.
+    async fn game_step(&mut self, on_ac: Option<bool>) {
+        let now = self.port.clock.now();
+        self.next_gpu_sample = now + GPU_SAMPLE;
+        let rules = &self.config.game_detection;
+        let allowed = rules.enabled && on_ac != Some(false);
+        let rules = policy::GameRules {
+            load_percent: rules.load_percent,
+            hold_after: Duration::from_secs(rules.hold_after_s.into()),
+            release_after: Duration::from_secs(rules.release_after_s.into()),
+        };
+        let awake = Sysfs::new(&self.port.root).read(GPU_RUNTIME_STATUS).as_deref() == Some("active");
+        let load = if allowed && awake { self.port.gpu.query().await.ok().map(|l| l.utilization_percent) } else { None };
+        let (game, action) = policy::game_step(self.game, rules, allowed, load, now);
+        self.game = game;
+        match action {
+            Some(policy::GameAction::Hold) => match self.port.profiles.hold(HOLD_PROFILE, HOLD_REASON).await {
+                Ok(cookie) => self.hold = Some(cookie),
+                Err(e) => {
+                    eprintln!("avelld: holding the {HOLD_PROFILE} profile: {e:#}");
+                    self.game = policy::Game::Idle;
+                }
+            },
+            Some(policy::GameAction::Release) => self.release_hold().await,
+            None => {}
+        }
+    }
+
+    async fn release_hold(&mut self) {
+        if let Some(cookie) = self.hold.take()
+            && let Err(e) = self.port.profiles.release(cookie).await
+        {
+            eprintln!("avelld: releasing the hold on the {HOLD_PROFILE} profile: {e:#}");
+        }
+    }
+
     async fn tick(&mut self) {
         let mut profile = match self.port.profiles.active().await {
             Ok(p) => p,
@@ -212,6 +258,24 @@ impl Engine {
         let on_ac = self.read_on_ac();
         let source_changed = on_ac != self.on_ac;
         self.on_ac = on_ac;
+
+        // a change nobody here made: the power menu or the Fn key
+        if self.hold.is_some() && profile != HOLD_PROFILE {
+            // it also cancelled the hold: no new one until this load has ended
+            self.hold = None;
+            self.game = policy::Game::Overridden { quiet_since: None };
+            if !source_changed {
+                self.remember_choice(&profile);
+            }
+        } else if self.hold.is_none() && !source_changed && self.applied.as_deref().is_some_and(|applied| applied != profile) {
+            self.remember_choice(&profile);
+        }
+
+        if self.port.clock.now() >= self.next_gpu_sample {
+            self.game_step(on_ac).await;
+            profile = self.port.profiles.active().await.unwrap_or(profile);
+        }
+
         if source_changed {
             // the charger rules: each power source has its profile
             if let (true, Some(on_ac)) = (self.config.charger.enabled, on_ac) {
@@ -223,9 +287,6 @@ impl Engine {
                     }
                 }
             }
-        } else if self.applied.as_deref().is_some_and(|applied| applied != profile) {
-            // changed in the power menu or with the Fn key
-            self.remember_choice(&profile);
         }
         // the firmware resets its registers over a suspend
         let suspended = self.suspended_now();
@@ -313,6 +374,7 @@ impl Engine {
             s.fans.control = Some(self.fan_control.name().to_string());
             s.fans.target_percent = self.fan_target;
         }
+        s.hold = self.hold.map(|_| HOLD_REASON.to_string());
         Ok(s)
     }
 
@@ -368,6 +430,7 @@ impl Engine {
                 command = rx.recv() => match command {
                     None => break,
                     Some(Command::Shutdown(reply)) => {
+                        self.release_hold().await;
                         self.restore();
                         let _ = reply.send(());
                         break;
@@ -388,6 +451,10 @@ impl Engine {
                     Some(Command::SetProfile(profile, reply)) => {
                         let result = self.port.profiles.set_active(&profile).await;
                         if result.is_ok() {
+                            if self.hold.take().is_some() {
+                                // a manual choice cancels the hold, as in the power menu
+                                self.game = policy::Game::Overridden { quiet_since: None };
+                            }
                             self.remember_choice(&profile);
                             self.apply(&profile).await;
                         }
@@ -413,6 +480,9 @@ pub async fn start(port: Port) -> anyhow::Result<Handle> {
         port: port.clone(),
         applied: None,
         on_ac: None,
+        game: policy::Game::Idle,
+        hold: None,
+        next_gpu_sample: Duration::ZERO,
         suspended: Duration::ZERO,
     };
     engine.suspended = engine.suspended_now();

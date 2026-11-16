@@ -10,6 +10,11 @@ use std::time::Duration;
 pub trait PowerProfiles: Send + Sync {
     async fn active(&self) -> anyhow::Result<String>;
     async fn set_active(&self, profile: &str) -> anyhow::Result<()>;
+    /// Holds a profile until released, with a reason the desktop can show; returns the hold's
+    /// cookie. A manual change of profile cancels the hold.
+    async fn hold(&self, profile: &str, reason: &str) -> anyhow::Result<u32>;
+    /// Releases a hold: the profile chosen by the owner returns.
+    async fn release(&self, cookie: u32) -> anyhow::Result<()>;
 }
 
 /// What the graphics card reports when it is awake.

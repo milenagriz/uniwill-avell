@@ -15,6 +15,16 @@ use avell::port::{Clock, GpuLoad, GpuProbe, Port, PowerProfiles, Services, Sessi
 pub struct FakeProfiles {
     pub active: Arc<Mutex<String>>,
     pub sets: Arc<Mutex<Vec<String>>>,
+    /// Holds in force: (cookie, reason, the profile to return to).
+    pub holds: Arc<Mutex<Vec<(u32, String, String)>>>,
+}
+
+impl FakeProfiles {
+    /// A choice in the power menu. As in power-profiles-daemon, it cancels every hold.
+    pub fn choose(&self, profile: &str) {
+        self.holds.lock().unwrap().clear();
+        *self.active.lock().unwrap() = profile.to_string();
+    }
 }
 
 #[async_trait::async_trait]
@@ -24,7 +34,23 @@ impl PowerProfiles for FakeProfiles {
     }
     async fn set_active(&self, profile: &str) -> anyhow::Result<()> {
         self.sets.lock().unwrap().push(profile.to_string());
-        *self.active.lock().unwrap() = profile.to_string();
+        self.choose(profile);
+        Ok(())
+    }
+    async fn hold(&self, profile: &str, reason: &str) -> anyhow::Result<u32> {
+        let mut holds = self.holds.lock().unwrap();
+        let cookie = holds.len() as u32 + 1;
+        let mut active = self.active.lock().unwrap();
+        holds.push((cookie, reason.to_string(), active.clone()));
+        *active = profile.to_string();
+        Ok(cookie)
+    }
+    async fn release(&self, cookie: u32) -> anyhow::Result<()> {
+        let mut holds = self.holds.lock().unwrap();
+        if let Some(i) = holds.iter().position(|h| h.0 == cookie) {
+            let (_, _, previous) = holds.remove(i);
+            *self.active.lock().unwrap() = previous;
+        }
         Ok(())
     }
 }
@@ -255,6 +281,12 @@ pub fn laptop_files() -> BTreeMap<&'static str, String> {
 pub const TEST_CONFIG: &str = r#"
 [fans]
 hysteresis_c = 5
+
+[game_detection]
+enabled = true
+load_percent = 50
+hold_after_s = 10
+release_after_s = 30
 
 [charger]
 enabled = true

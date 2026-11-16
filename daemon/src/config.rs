@@ -84,6 +84,7 @@ impl Default for Profiles {
 pub struct Config {
     pub charger: Charger,
     pub fans: Fans,
+    pub game_detection: GameDetection,
     pub profiles: Profiles,
 }
 
@@ -108,6 +109,25 @@ impl Default for Charger {
 impl Charger {
     pub fn profile(&self, on_ac: bool) -> &str {
         if on_ac { &self.on_ac } else { &self.on_battery }
+    }
+}
+
+/// Game detection: the performance profile is held while the graphics card is busy.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GameDetection {
+    pub enabled: bool,
+    /// The graphics card counts as busy at this utilisation or above.
+    pub load_percent: u32,
+    /// How long it has to stay busy before performance is held, and how long it has to stay
+    /// below the threshold before the hold is released, in seconds.
+    pub hold_after_s: u32,
+    pub release_after_s: u32,
+}
+
+impl Default for GameDetection {
+    fn default() -> Self {
+        GameDetection { enabled: true, load_percent: 60, hold_after_s: 15, release_after_s: 60 }
     }
 }
 
@@ -141,6 +161,15 @@ impl Config {
                 "charger.{key} is {profile:?}: the Power profiles are {}",
                 PROFILES.join(", ")
             );
+        }
+        let game = &config.game_detection;
+        anyhow::ensure!(
+            (1..=100).contains(&game.load_percent),
+            "game_detection.load_percent is {}: allowed are 1 to 100",
+            game.load_percent
+        );
+        for (key, s) in [("hold_after_s", game.hold_after_s), ("release_after_s", game.release_after_s)] {
+            anyhow::ensure!(s <= 3600, "game_detection.{key} is {s}: allowed are 0 to 3600 seconds");
         }
         for name in PROFILES {
             let b = config.bundle(name).expect("every profile has a bundle");

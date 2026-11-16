@@ -1,6 +1,8 @@
 //! The policy: what the machine should be doing, computed from what the daemon knows. Pure: no
 //! I/O and no clock, so the engine feeds it readings and writes out what it returns.
 
+use std::time::Duration;
+
 /// The TGP offset to set: the bundle's on AC, none on battery, where the graphics card would
 /// only drain it faster.
 pub fn tgp_offset_w(bundle_w: u32, on_ac: Option<bool>) -> u32 {
@@ -49,4 +51,61 @@ pub fn fan_percent(curve: &Curve, hysteresis_c: u32, temp_c: i64, state: &mut Fa
 /// A fan speed in percent as the 0-255 duty the kernel takes.
 pub fn duty(percent: u32) -> u32 {
     (percent.min(100) * 255 + 50) / 100
+}
+
+/// Where game detection stands.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Game {
+    #[default]
+    Idle,
+    /// The graphics card has been busy since then, not yet long enough for a hold.
+    Busy { since: Duration },
+    /// Performance is held; `quiet_since` is set while the load is low.
+    Holding { quiet_since: Option<Duration> },
+    /// The owner chose another profile during a hold: no new hold until this load has ended.
+    Overridden { quiet_since: Option<Duration> },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GameAction {
+    Hold,
+    Release,
+}
+
+/// The settings game detection goes by.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GameRules {
+    pub load_percent: u32,
+    pub hold_after: Duration,
+    pub release_after: Duration,
+}
+
+/// One reading of the graphics card's load (None: asleep, so not asked) at `now`. `allowed` is
+/// false when detection is off or the machine is on battery.
+pub fn game_step(state: Game, rules: GameRules, allowed: bool, load_percent: Option<u32>, now: Duration) -> (Game, Option<GameAction>) {
+    let busy = load_percent.is_some_and(|l| l >= rules.load_percent);
+    let ended = |quiet_since: Duration| now.saturating_sub(quiet_since) >= rules.release_after;
+    if !allowed {
+        let action = matches!(state, Game::Holding { .. }).then_some(GameAction::Release);
+        return (Game::Idle, action);
+    }
+    match state {
+        Game::Idle if busy => game_step(Game::Busy { since: now }, rules, allowed, load_percent, now),
+        Game::Idle => (Game::Idle, None),
+        Game::Busy { .. } if !busy => (Game::Idle, None),
+        Game::Busy { since } if now.saturating_sub(since) >= rules.hold_after => {
+            (Game::Holding { quiet_since: None }, Some(GameAction::Hold))
+        }
+        Game::Busy { since } => (Game::Busy { since }, None),
+        Game::Holding { .. } if busy => (Game::Holding { quiet_since: None }, None),
+        Game::Holding { quiet_since } => {
+            let quiet_since = quiet_since.unwrap_or(now);
+            if ended(quiet_since) { (Game::Idle, Some(GameAction::Release)) } else { (Game::Holding { quiet_since: Some(quiet_since) }, None) }
+        }
+        Game::Overridden { .. } if busy => (Game::Overridden { quiet_since: None }, None),
+        Game::Overridden { quiet_since } => {
+            let quiet_since = quiet_since.unwrap_or(now);
+            if ended(quiet_since) { (Game::Idle, None) } else { (Game::Overridden { quiet_since: Some(quiet_since) }, None) }
+        }
+    }
 }

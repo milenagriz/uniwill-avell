@@ -39,6 +39,12 @@ impl PowerProfiles for Ppd {
     async fn set_active(&self, profile: &str) -> anyhow::Result<()> {
         Ok(self.proxy().await?.set_property("ActiveProfile", profile).await?)
     }
+    async fn hold(&self, profile: &str, reason: &str) -> anyhow::Result<u32> {
+        Ok(self.proxy().await?.call("HoldProfile", &(profile, reason, "org.avell.Control1")).await?)
+    }
+    async fn release(&self, cookie: u32) -> anyhow::Result<()> {
+        Ok(self.proxy().await?.call("ReleaseProfile", &(cookie,)).await?)
+    }
 }
 
 /// Asks the NVIDIA driver; only ever called when the kernel has the card awake.

@@ -9,6 +9,9 @@ use crate::sysfs::Sysfs;
 pub struct Status {
     /// The active Power profile, as the power-profile service names it.
     pub profile: String,
+    /// Why the daemon is holding the performance profile, when it is.
+    #[serde(default)]
+    pub hold: Option<String>,
     pub temperatures: Temperatures,
     pub fans: Fans,
     pub gpu: Gpu,
@@ -166,6 +169,7 @@ pub async fn read(port: &Port) -> anyhow::Result<Status> {
     }
     let mut s = Status {
         profile: port.profiles.active().await?,
+        hold: None,
         temperatures: Temperatures { cpu_c: temp(1), gpu_c: temp(2) },
         fans,
         gpu: gpu(port, &fs).await,

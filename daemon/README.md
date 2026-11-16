@@ -7,7 +7,7 @@
 | `port` | The system port: kernel control files under a root, the power-profile service, the GPU probe, the clock, desktop sessions, the service manager, the configuration file |
 | `real` | The real port: `/`, power-profiles-daemon, `nvidia-smi` (only when the card is already awake), logind, systemd, `/etc/avelld/config.toml` |
 | `config` | The configuration: one bundle per Power profile, and its validation |
-| `policy` | Pure decisions, no I/O and no clock: the fan speed for a temperature along a curve, with hysteresis |
+| `policy` | Pure decisions, no I/O and no clock: the fan speed for a temperature along a curve with hysteresis, the TGP offset for the power source, and when game detection holds and releases |
 | `engine` | One task that owns the state: every second it reads the active Power profile and applies its bundle when the profile changed or the machine resumed; every 2 s it writes the fan duty |
 | `status` | The machine state, read through the port |
 | `api` | The control API, `org.avell.Control1` at `/org/avell/Control1` on the system bus |
@@ -50,6 +50,12 @@ enabled = true          # false: plugging and unplugging change nothing
 on_ac = "performance"    # the profile set when the charger is plugged in
 on_battery = "power-saver"   # and when it is unplugged
 
+[game_detection]
+enabled = true
+load_percent = 60       # the graphics card counts as busy at this utilisation or above
+hold_after_s = 15       # busy this long: hold the performance profile
+release_after_s = 60    # below the threshold this long: release the hold
+
 [fans]
 mode = "curve"          # who runs the fans from start: "curve" (the daemon) or "automatic" (the firmware)
 hysteresis_c = 4        # the fans slow down only once it is this much cooler than where they last sped up
@@ -87,6 +93,16 @@ When the power source changes (and at start), the daemon sets that source's prof
 change of profile (power menu, Fn key, `avellctl profile set`) replaces `charger.on_ac` or `charger.on_battery`, whichever
 source is in use, and is saved, so each source comes back with what was last chosen on it. On battery the TGP offset is 0
 whatever the bundle says, with the rules on or off. Turn the rules off with `avellctl config set charger.enabled false`.
+
+## Game detection
+
+Every 2 s the daemon reads the graphics card's `runtime_status` from the kernel and asks the card for its load only when it
+is already awake, so a sleeping card is never woken. Load at or above `load_percent` for `hold_after_s` makes the daemon ask
+power-profiles-daemon to hold `performance` (`HoldProfile`, so the power menu shows the hold and its reason); once the load
+has stayed below the threshold for `release_after_s` the hold is released and power-profiles-daemon returns to the owner's
+own choice. A hold is not remembered as a manual choice. Choosing another profile during a hold cancels it, and no new hold
+starts until that load has ended. Nothing is held on battery. `avellctl status` shows an active hold and why. Turn it off
+with `avellctl config set game_detection.enabled false`.
 
 ## Fans
 
