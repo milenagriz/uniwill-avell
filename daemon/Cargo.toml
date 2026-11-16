@@ -3,7 +3,7 @@ name = "avell"
 version = "0.1.0"
 edition = "2024"
 description = "Daemon (avelld) and CLI (avellctl) for the Avell A52 MOB control stack"
-license = "GPL-2.0-or-later"
+license = "MIT"
 
 [lib]
 path = "src/lib.rs"

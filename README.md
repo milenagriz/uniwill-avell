@@ -80,4 +80,7 @@ To fix it, rebase `driver/patches/0003` onto the new kernel's `drivers/platform/
 
 ## License
 
-GPL-2.0-or-later, the same as the upstream driver (`uniwill-acpi.c` by Armin Wolf).
+- `driver/`: GPL-2.0-or-later, the same as the upstream driver (`uniwill-acpi.c` by Armin Wolf); see `driver/LICENSE`.
+- Everything else (daemon, CLI, bar plugin, app, scripts): MIT; see `LICENSE` (and `app/LICENSE` for the parts from the
+  Omarchy app templates).
+- `evidence/` holds firmware images and tables read from the machine; they remain their manufacturers'.
