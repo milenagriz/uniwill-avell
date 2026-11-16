@@ -3,11 +3,11 @@
 use zbus::interface;
 use zbus::message::Header;
 
-use crate::port::Port;
+use crate::engine::Handle;
 use crate::status;
 
 pub struct Control {
-    port: Port,
+    daemon: Handle,
 }
 
 fn failed(e: anyhow::Error) -> zbus::fdo::Error {
@@ -31,7 +31,7 @@ impl Control {
     /// Changes are allowed for the user of the active local desktop session only.
     async fn authorize(&self, conn: &zbus::Connection, hdr: &Header<'_>) -> zbus::fdo::Result<()> {
         let uid = caller_uid(conn, hdr).await?;
-        if self.port.sessions.is_active_local_user(uid).await.map_err(failed)? {
+        if self.daemon.port().sessions.is_active_local_user(uid).await.map_err(failed)? {
             Ok(())
         } else {
             Err(zbus::fdo::Error::AccessDenied(format!(
@@ -45,7 +45,7 @@ impl Control {
 impl Control {
     /// The whole machine state, as JSON.
     async fn get_status(&self) -> zbus::fdo::Result<String> {
-        let s = status::read(&self.port).await.map_err(failed)?;
+        let s = status::read(self.daemon.port()).await.map_err(failed)?;
         serde_json::to_string(&s).map_err(|e| failed(e.into()))
     }
 
@@ -58,25 +58,40 @@ impl Control {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         self.authorize(conn, &hdr).await?;
-        self.port.profiles.set_active(profile).await.map_err(failed)
+        self.daemon.set_profile(profile).await.map_err(failed)
+    }
+
+    /// The configuration in force, as TOML.
+    async fn get_config(&self) -> zbus::fdo::Result<String> {
+        self.daemon.config().await.map_err(failed)
+    }
+
+    /// Replaces the configuration (TOML). An invalid one is refused with the reason and the
+    /// previous one stays in force; a valid one is saved and applied at once.
+    async fn set_config(
+        &self,
+        toml: &str,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        self.authorize(conn, &hdr).await?;
+        self.daemon.set_config(toml).await.map_err(|e| zbus::fdo::Error::InvalidArgs(format!("{e:#}")))
     }
 }
 
 /// Serves the control API on the system bus under its well-known name.
-pub async fn serve_system(port_root: std::path::PathBuf) -> anyhow::Result<zbus::Connection> {
-    let conn = zbus::Connection::system().await?;
-    let port = crate::real::port(&conn, port_root).await;
-    conn.object_server().at(crate::OBJECT_PATH, Control { port }).await?;
+pub async fn serve_system(conn: &zbus::Connection, daemon: Handle) -> anyhow::Result<()> {
+    conn.object_server().at(crate::OBJECT_PATH, Control { daemon }).await?;
     conn.request_name(crate::BUS_NAME).await?;
-    Ok(conn)
+    Ok(())
 }
 
 /// Serves the control API on one end of a private peer-to-peer connection.
-pub async fn serve_p2p(stream: std::os::unix::net::UnixStream, port: Port) -> zbus::Result<zbus::Connection> {
+pub async fn serve_p2p(stream: std::os::unix::net::UnixStream, daemon: Handle) -> zbus::Result<zbus::Connection> {
     zbus::connection::Builder::unix_stream(stream)
         .server(zbus::Guid::generate())
         .p2p()
-        .serve_at(crate::OBJECT_PATH, Control { port })
+        .serve_at(crate::OBJECT_PATH, Control { daemon })
         .build()
         .await
 }

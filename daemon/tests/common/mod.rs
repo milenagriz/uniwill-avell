@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use avell::client::Client;
-use avell::port::{Clock, GpuLoad, GpuProbe, Port, PowerProfiles, Sessions};
+use avell::port::{Clock, GpuLoad, GpuProbe, Port, PowerProfiles, Services, Sessions};
 
 /// Stands in for power-profiles-daemon.
 #[derive(Clone, Default)]
@@ -44,15 +44,58 @@ impl GpuProbe for FakeGpu {
     }
 }
 
-/// A clock that only moves when the test says so.
-#[derive(Clone, Default)]
+/// A clock that only moves when the test says so. `Rig::advance` returns once the daemon has
+/// handled everything due and is waiting for a later deadline.
+#[derive(Clone)]
 pub struct FakeClock {
-    pub now: Arc<Mutex<Duration>>,
+    /// (monotonic, boot time): boot time also moves while "suspended".
+    pub time: tokio::sync::watch::Sender<(Duration, Duration)>,
+    /// (times the daemon went idle, the deadline it is waiting for)
+    pub idle: tokio::sync::watch::Sender<(u64, Duration)>,
 }
 
+impl Default for FakeClock {
+    fn default() -> Self {
+        FakeClock {
+            time: tokio::sync::watch::channel((Duration::ZERO, Duration::ZERO)).0,
+            idle: tokio::sync::watch::channel((0, Duration::ZERO)).0,
+        }
+    }
+}
+
+#[async_trait::async_trait]
 impl Clock for FakeClock {
     fn now(&self) -> Duration {
-        *self.now.lock().unwrap()
+        self.time.borrow().0
+    }
+    fn boot_time(&self) -> Duration {
+        self.time.borrow().1
+    }
+    async fn sleep_until(&self, deadline: Duration) {
+        let mut rx = self.time.subscribe();
+        loop {
+            if rx.borrow_and_update().0 >= deadline {
+                return;
+            }
+            self.idle.send_modify(|i| *i = (i.0 + 1, deadline));
+            if rx.changed().await.is_err() {
+                return std::future::pending().await;
+            }
+        }
+    }
+}
+
+/// Stands in for systemd: which units the daemon started or stopped.
+#[derive(Clone, Default)]
+pub struct FakeServices {
+    pub running: Arc<Mutex<BTreeMap<String, bool>>>,
+}
+
+#[async_trait::async_trait]
+impl Services for FakeServices {
+    async fn set_running(&self, unit: &str, running: bool) -> anyhow::Result<()> {
+        self.running.lock().unwrap().insert(unit.to_string(), running);
+        Ok(())
     }
 }
 
@@ -75,7 +118,9 @@ pub struct Rig {
     pub gpu: FakeGpu,
     pub clock: FakeClock,
     pub sessions: FakeSessions,
+    pub services: FakeServices,
     pub client: Client,
+    pub daemon: avell::engine::Handle,
     _server: zbus::Connection,
 }
 
@@ -87,12 +132,17 @@ pub fn my_uid() -> u32 {
 impl Rig {
     /// A machine laid out like this laptop: the patched driver's files under a temporary root.
     pub async fn start() -> Rig {
+        Self::start_with(Self::laptop()).await
+    }
+
+    /// A temporary root laid out like this laptop, with the test configuration.
+    pub fn laptop() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
-        let files = laptop_files();
-        for (path, content) in &files {
+        for (path, content) in &laptop_files() {
             write(root.path(), path, content);
         }
-        Self::start_with(root).await
+        write(root.path(), "etc/avelld/config.toml", TEST_CONFIG);
+        root
     }
 
     pub async fn start_with(root: tempfile::TempDir) -> Rig {
@@ -100,6 +150,7 @@ impl Rig {
         *profiles.active.lock().unwrap() = "performance".into();
         let gpu = FakeGpu::default();
         let clock = FakeClock::default();
+        let services = FakeServices::default();
         let sessions = FakeSessions { active_local_user: Arc::new(Mutex::new(Some(my_uid()))) };
         let port = Port {
             root: root.path().to_path_buf(),
@@ -107,10 +158,40 @@ impl Rig {
             gpu: Arc::new(gpu.clone()),
             clock: Arc::new(clock.clone()),
             sessions: Arc::new(sessions.clone()),
+            services: Arc::new(services.clone()),
+            config_path: root.path().join("etc/avelld/config.toml"),
         };
+        let daemon = avell::engine::start(port).await.unwrap();
         let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
-        let (server, client) = tokio::join!(avell::api::serve_p2p(a, port), Client::connect_p2p(b));
-        Rig { root, profiles, gpu, clock, sessions, client: client.unwrap(), _server: server.unwrap() }
+        let (server, client) = tokio::join!(avell::api::serve_p2p(a, daemon.clone()), Client::connect_p2p(b));
+        let rig = Rig { root, profiles, gpu, clock, sessions, services, client: client.unwrap(), daemon, _server: server.unwrap() };
+        rig.advance(Duration::ZERO).await;
+        rig
+    }
+
+    /// Moves the clock on and returns when the daemon has caught up.
+    pub async fn advance(&self, by: Duration) {
+        let target = self.clock.now() + by;
+        self.clock.time.send_modify(|t| *t = (t.0 + by, t.1 + by));
+        let mut rx = self.clock.idle.subscribe();
+        loop {
+            if rx.borrow_and_update().1 > target {
+                return;
+            }
+            rx.changed().await.unwrap();
+        }
+    }
+
+    /// Suspends the machine for a while (boot time moves, monotonic time does not), then lets
+    /// the daemon run for a second after resume.
+    pub async fn suspend(&self, for_: Duration) {
+        self.clock.time.send_modify(|t| t.1 += for_);
+        self.advance(Duration::from_secs(1)).await;
+    }
+
+    /// The bundle file as a test wants it, before start.
+    pub fn config_rel() -> &'static str {
+        "etc/avelld/config.toml"
     }
 
     pub fn path(&self, rel: &str) -> PathBuf {
@@ -168,4 +249,29 @@ pub fn laptop_files() -> BTreeMap<&'static str, String> {
     f.insert(Box::leak(format!("{RAPL}/constraint_1_power_limit_uw").into_boxed_str()), "120000000".into());
     f.insert("sys/firmware/acpi/platform_profile", "performance".into());
     f
+}
+
+/// Bundles with values that differ per profile, so a test can tell which one was applied.
+pub const TEST_CONFIG: &str = r#"
+[profiles.power-saver]
+tgp_offset_w = 0
+dynamic_boost = false
+cpu_long_term_w = 20
+cpu_short_term_w = 30
+
+[profiles.balanced]
+tgp_offset_w = 10
+dynamic_boost = true
+cpu_long_term_w = 45
+cpu_short_term_w = 65
+
+[profiles.performance]
+tgp_offset_w = 20
+dynamic_boost = true
+cpu_long_term_w = 80
+cpu_short_term_w = 80
+"#;
+
+pub fn watts(rig: &Rig, constraint: u32) -> u64 {
+    rig.read(&format!("{RAPL}/constraint_{constraint}_power_limit_uw")).parse::<u64>().unwrap() / 1_000_000
 }

@@ -6,6 +6,8 @@
 
 pub mod api;
 pub mod client;
+pub mod config;
+pub mod engine;
 pub mod port;
 pub mod real;
 pub mod status;

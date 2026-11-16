@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::port::{Clock, GpuLoad, GpuProbe, Port, PowerProfiles, Sessions};
+use crate::port::{Clock, GpuLoad, GpuProbe, Port, PowerProfiles, Services, Sessions};
 
 /// power-profiles-daemon on the system bus (its current name, then the legacy one).
 pub struct Ppd {
@@ -65,9 +65,36 @@ impl GpuProbe for NvidiaSmi {
 
 pub struct MonotonicClock(Instant);
 
+#[async_trait::async_trait]
 impl Clock for MonotonicClock {
     fn now(&self) -> Duration {
         self.0.elapsed()
+    }
+    fn boot_time(&self) -> Duration {
+        // /proc/uptime counts suspended time; Instant (CLOCK_MONOTONIC) does not
+        std::fs::read_to_string("/proc/uptime").ok()
+            .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
+            .map(Duration::from_secs_f64)
+            .unwrap_or_else(|| self.now())
+    }
+    async fn sleep_until(&self, deadline: Duration) {
+        tokio::time::sleep(deadline.saturating_sub(self.now())).await
+    }
+}
+
+/// systemd on the system bus.
+pub struct Systemd {
+    conn: zbus::Connection,
+}
+
+#[async_trait::async_trait]
+impl Services for Systemd {
+    async fn set_running(&self, unit: &str, running: bool) -> anyhow::Result<()> {
+        let mgr = zbus::Proxy::new(&self.conn, "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+                                   "org.freedesktop.systemd1.Manager").await?;
+        let method = if running { "StartUnit" } else { "StopUnit" };
+        let _job: zbus::OwnedObjectPath = mgr.call(method, &(unit, "replace")).await?;
+        Ok(())
     }
 }
 
@@ -102,10 +129,12 @@ impl Sessions for Logind {
 /// The port for this machine, with the kernel files under `root` (normally "/").
 pub async fn port(conn: &zbus::Connection, root: std::path::PathBuf) -> Port {
     Port {
-        root,
         profiles: Arc::new(Ppd { conn: conn.clone() }),
         gpu: Arc::new(NvidiaSmi),
         clock: Arc::new(MonotonicClock(Instant::now())),
         sessions: Arc::new(Logind { conn: conn.clone() }),
+        services: Arc::new(Systemd { conn: conn.clone() }),
+        config_path: root.join("etc/avelld/config.toml"),
+        root,
     }
 }

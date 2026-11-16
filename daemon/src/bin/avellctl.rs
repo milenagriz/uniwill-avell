@@ -9,6 +9,9 @@ commands:
   status                 the whole machine state
   profile                the active Power profile
   profile set <name>     power-saver, balanced or performance
+  config                 the configuration in force (TOML)
+  config set <key> <value>
+                         change one setting, e.g. profiles.balanced.tgp_offset_w 15
 
 --json prints machine-readable output for every command.";
 
@@ -48,11 +51,28 @@ fn explain(e: anyhow::Error) -> anyhow::Error {
     let text = format!("{e:#}");
     if text.contains("ServiceUnknown") || text.contains("was not provided by any .service files") {
         anyhow::anyhow!("avelld is not running (check: systemctl status avelld)")
+    } else if let Some((_, reason)) = text.rsplit_once("invalid configuration: ") {
+        anyhow::anyhow!("invalid configuration: {reason}")
     } else if text.contains("AccessDenied") {
         anyhow::anyhow!("not allowed: {}", text.rsplit(':').next().unwrap_or(&text).trim())
     } else {
         e
     }
+}
+
+/// Sets one setting by its dotted key. The value is read as TOML (15, true), else as a string.
+fn set_key(config: &mut toml::Table, key: &str, value: &str) -> anyhow::Result<()> {
+    let mut parts: Vec<&str> = key.split('.').collect();
+    let last = parts.pop().unwrap_or_default();
+    let mut table = config;
+    for part in parts {
+        table = table.get_mut(part).and_then(toml::Value::as_table_mut)
+            .ok_or_else(|| anyhow::anyhow!("no setting {key:?} (see: avellctl config)"))?;
+    }
+    anyhow::ensure!(table.contains_key(last) && !table[last].is_table(), "no setting {key:?} (see: avellctl config)");
+    let parsed = format!("v = {value}").parse::<toml::Table>().ok().and_then(|mut t| t.remove("v"));
+    table.insert(last.to_string(), parsed.unwrap_or_else(|| toml::Value::String(value.to_string())));
+    Ok(())
 }
 
 async fn run(json: bool, args: &[String]) -> anyhow::Result<()> {
@@ -69,6 +89,16 @@ async fn run(json: bool, args: &[String]) -> anyhow::Result<()> {
         ["profile", "set", name] => {
             client.set_profile(name).await.map_err(explain)?;
             if json { println!("{}", serde_json::json!({ "profile": name })) }
+        }
+        ["config"] => {
+            let text = client.config().await.map_err(explain)?;
+            if json { println!("{}", serde_json::to_string_pretty(&text.parse::<toml::Table>()?)?) } else { print!("{text}") }
+        }
+        ["config", "set", key, value] => {
+            let mut config: toml::Table = client.config().await.map_err(explain)?.parse()?;
+            set_key(&mut config, key, value)?;
+            client.set_config(&config.to_string()).await.map_err(explain)?;
+            if json { println!("{}", serde_json::to_string_pretty(&config)?) }
         }
         _ => anyhow::bail!("{USAGE}"),
     }

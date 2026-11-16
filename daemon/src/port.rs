@@ -27,9 +27,22 @@ pub trait GpuProbe: Send + Sync {
     async fn query(&self) -> anyhow::Result<GpuLoad>;
 }
 
-/// Monotonic time since an arbitrary start.
+/// Time, and waiting for it.
+#[async_trait::async_trait]
 pub trait Clock: Send + Sync {
+    /// Monotonic time since an arbitrary start; stands still while the machine is suspended.
     fn now(&self) -> Duration;
+    /// Time since boot, which keeps counting through a suspend.
+    fn boot_time(&self) -> Duration;
+    /// Returns once `now()` has reached `deadline`.
+    async fn sleep_until(&self, deadline: Duration);
+}
+
+/// The service manager (systemd).
+#[async_trait::async_trait]
+pub trait Services: Send + Sync {
+    /// Starts or stops a unit.
+    async fn set_running(&self, unit: &str, running: bool) -> anyhow::Result<()>;
 }
 
 /// Who is allowed to change things: the user of the active local desktop session.
@@ -46,4 +59,7 @@ pub struct Port {
     pub gpu: Arc<dyn GpuProbe>,
     pub clock: Arc<dyn Clock>,
     pub sessions: Arc<dyn Sessions>,
+    pub services: Arc<dyn Services>,
+    /// The configuration file (`/etc/avelld/config.toml` on the real machine).
+    pub config_path: PathBuf,
 }

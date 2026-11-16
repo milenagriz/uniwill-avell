@@ -130,13 +130,12 @@ async fn gpu(port: &Port, fs: &Sysfs<'_>) -> Gpu {
         _ => "unknown",
     }
     .to_string();
-    if g.state == "awake" {
-        if let Ok(load) = port.gpu.query().await {
+    if g.state == "awake"
+        && let Ok(load) = port.gpu.query().await {
             g.power_draw_w = Some(load.power_draw_w);
             g.power_limit_w = Some(load.power_limit_w);
             g.utilization_percent = Some(load.utilization_percent);
         }
-    }
     g
 }
 

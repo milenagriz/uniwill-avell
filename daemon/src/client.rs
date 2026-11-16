@@ -8,6 +8,8 @@ use crate::status::Status;
 trait Control {
     fn get_status(&self) -> zbus::Result<String>;
     fn set_profile(&self, profile: &str) -> zbus::Result<()>;
+    fn get_config(&self) -> zbus::Result<String>;
+    fn set_config(&self, toml: &str) -> zbus::Result<()>;
 }
 
 pub struct Client {
@@ -30,6 +32,16 @@ impl Client {
 
     pub async fn set_profile(&self, profile: &str) -> anyhow::Result<()> {
         Ok(self.proxy.set_profile(profile).await?)
+    }
+
+    /// The configuration in force, as TOML.
+    pub async fn config(&self) -> anyhow::Result<String> {
+        Ok(self.proxy.get_config().await?)
+    }
+
+    /// Replaces the configuration. An invalid one is refused and nothing changes.
+    pub async fn set_config(&self, toml: &str) -> anyhow::Result<()> {
+        Ok(self.proxy.set_config(toml).await?)
     }
 
     pub async fn status(&self) -> anyhow::Result<Status> {

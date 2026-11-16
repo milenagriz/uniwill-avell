@@ -9,6 +9,7 @@ VERSION=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' "$(dirname "$0")/../driver/d
 sudo systemctl disable --now avelld.service 2>/dev/null || true
 sudo rm -f /etc/systemd/system/avelld.service /usr/share/dbus-1/system.d/org.avell.Control1.conf \
   /usr/local/bin/avelld /usr/local/bin/avellctl
+sudo rm -rf /etc/avelld
 sudo systemctl daemon-reload
 
 # Fans back to automatic before the driver goes away (the driver also does this on unload)
