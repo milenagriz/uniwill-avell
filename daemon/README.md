@@ -19,6 +19,7 @@
 |---|---|---|
 | `GetStatus() → s` | anyone | The whole state as JSON (see `avellctl --json status`) |
 | `SetProfile(s)` | the active local desktop user | power-saver, balanced or performance, through power-profiles-daemon; its bundle is applied at once |
+| `GetConfigJson() → s`, `SetConfigJson(s)` | as GetConfig / SetConfig | The same configuration as JSON, for the interfaces |
 | `SetFan(s, u)` | the active local desktop user | Who runs the fans: `curve`, `fixed` (with a percentage), `max` or `automatic`. Lasts until the next call or a restart |
 | `SetKeyboardBrightness(u)` | the active local desktop user | The keyboard backlight's level, 0 (off) to the keyboard's maximum (4 here) |
 | `SetKeyboardColor(y, y, y)` | the active local desktop user | Red, green, blue, each 0-255, scaled to what the keyboard takes (0-50 here) |

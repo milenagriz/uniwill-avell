@@ -109,3 +109,24 @@ async fn a_clean_stop_leaves_the_machine_in_the_firmwares_state() {
     assert_eq!(watts(&rig, 0), 120);
     assert_eq!(watts(&rig, 1), 120);
 }
+
+#[tokio::test]
+async fn the_configuration_can_be_read_and_replaced_as_json() {
+    let rig = Rig::start().await;
+
+    let mut config: serde_json::Value = serde_json::from_str(&rig.client.config_json().await.unwrap()).unwrap();
+    assert_eq!(config["profiles"]["performance"]["tgp_offset_w"], 20);
+    assert_eq!(config["profiles"]["performance"]["fan_curve"][1], serde_json::json!([70, 60]));
+
+    config["profiles"]["performance"]["tgp_offset_w"] = 12.into();
+    rig.client.set_config_json(&config.to_string()).await.unwrap();
+    assert_eq!(rig.read(&format!("{PLATFORM}/ctgp_offset")), "12");
+    let saved: toml::Table = rig.read(Rig::config_rel()).parse().unwrap();
+    assert_eq!(saved["profiles"]["performance"]["tgp_offset_w"].as_integer(), Some(12));
+
+    // the same checks as for TOML
+    config["profiles"]["performance"]["tgp_offset_w"] = 21.into();
+    let err = rig.client.set_config_json(&config.to_string()).await.unwrap_err();
+    assert!(format!("{err:#}").contains("invalid configuration"), "{err:#}");
+    assert_eq!(rig.read(&format!("{PLATFORM}/ctgp_offset")), "12");
+}

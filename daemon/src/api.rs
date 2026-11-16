@@ -136,6 +136,26 @@ impl Control {
         self.authorize(conn, &hdr).await?;
         self.daemon.set_config(toml).await.map_err(|e| zbus::fdo::Error::InvalidArgs(format!("{e:#}")))
     }
+
+    /// The configuration in force, as JSON: the same settings as GetConfig, for the interfaces.
+    async fn get_config_json(&self) -> zbus::fdo::Result<String> {
+        let toml = self.daemon.config().await.map_err(failed)?;
+        let table: toml::Table = toml.parse().map_err(|e: toml::de::Error| failed(e.into()))?;
+        serde_json::to_string(&table).map_err(|e| failed(e.into()))
+    }
+
+    /// Replaces the configuration, given as JSON. Checked exactly as SetConfig.
+    async fn set_config_json(
+        &self,
+        json: &str,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        self.authorize(conn, &hdr).await?;
+        let invalid = |e: String| zbus::fdo::Error::InvalidArgs(format!("invalid configuration: {e}"));
+        let table: toml::Table = serde_json::from_str(json).map_err(|e| invalid(e.to_string()))?;
+        self.daemon.set_config(&table.to_string()).await.map_err(|e| zbus::fdo::Error::InvalidArgs(format!("{e:#}")))
+    }
 }
 
 /// Serves the control API on the system bus under its well-known name.

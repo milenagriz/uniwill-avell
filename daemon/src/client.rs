@@ -15,6 +15,8 @@ trait Control {
     fn set_charge_cap(&self, percent: u32) -> zbus::Result<()>;
     fn get_config(&self) -> zbus::Result<String>;
     fn set_config(&self, toml: &str) -> zbus::Result<()>;
+    fn get_config_json(&self) -> zbus::Result<String>;
+    fn set_config_json(&self, json: &str) -> zbus::Result<()>;
 }
 
 pub struct Client {
@@ -72,6 +74,16 @@ impl Client {
     /// Replaces the configuration. An invalid one is refused and nothing changes.
     pub async fn set_config(&self, toml: &str) -> anyhow::Result<()> {
         Ok(self.proxy.set_config(toml).await?)
+    }
+
+    /// The configuration in force, as JSON (for the interfaces).
+    pub async fn config_json(&self) -> anyhow::Result<String> {
+        Ok(self.proxy.get_config_json().await?)
+    }
+
+    /// Replaces the configuration, given as JSON; checked exactly as [`Self::set_config`].
+    pub async fn set_config_json(&self, json: &str) -> anyhow::Result<()> {
+        Ok(self.proxy.set_config_json(json).await?)
     }
 
     pub async fn status(&self) -> anyhow::Result<Status> {
