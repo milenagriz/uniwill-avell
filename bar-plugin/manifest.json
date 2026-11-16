@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "avell.control",
+  "name": "Avell Control",
+  "version": "0.1.0",
+  "author": "milenagriz5",
+  "license": "MIT",
+  "description": "Power profile, temperatures and fans of the Avell A52 MOB in the bar, with a panel to switch the Power profile and toggle Max fan. A thin client of avellctl.",
+  "kinds": [
+    "bar-widget",
+    "service"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Avell Control",
+    "description": "Active Power profile, hottest temperature and fan speed; click for the control panel.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showLabel": true
+    },
+    "schema": [
+      {
+        "key": "showLabel",
+        "type": "boolean",
+        "label": "Show temperature and fan speed beside the icon",
+        "defaultValue": true,
+        "description": "Off leaves only the Power profile icon. Vertical bars are always icon-only."
+      }
+    ]
+  }
+}
