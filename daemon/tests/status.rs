@@ -17,6 +17,7 @@ async fn status_shows_both_temperatures_and_both_fans() {
     rig.write(&format!("{HWMON}/temp1_input"), "61000");
     rig.write(&format!("{HWMON}/fan1_input"), "5500");
     rig.write(&format!("{HWMON}/pwm1"), "255");
+    rig.write(&format!("{HWMON}/pwm2"), "70");
     rig.write(&format!("{HWMON}/pwm1_enable"), "0");
     rig.write(&format!("{HWMON}/pwm2_enable"), "0");
 

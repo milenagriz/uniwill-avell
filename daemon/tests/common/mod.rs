@@ -253,11 +253,15 @@ pub fn laptop_files() -> BTreeMap<&'static str, String> {
 
 /// Bundles with values that differ per profile, so a test can tell which one was applied.
 pub const TEST_CONFIG: &str = r#"
+[fans]
+hysteresis_c = 5
+
 [profiles.power-saver]
 tgp_offset_w = 0
 dynamic_boost = false
 cpu_long_term_w = 20
 cpu_short_term_w = 30
+fan_curve = [[40, 0], [80, 100]]
 
 [profiles.balanced]
 tgp_offset_w = 10
@@ -270,6 +274,7 @@ tgp_offset_w = 20
 dynamic_boost = true
 cpu_long_term_w = 80
 cpu_short_term_w = 80
+fan_curve = [[50, 20], [70, 60], [90, 100]]
 "#;
 
 pub fn watts(rig: &Rig, constraint: u32) -> u64 {

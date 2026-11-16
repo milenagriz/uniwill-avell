@@ -7,7 +7,8 @@
 | `port` | The system port: kernel control files under a root, the power-profile service, the GPU probe, the clock, desktop sessions, the service manager, the configuration file |
 | `real` | The real port: `/`, power-profiles-daemon, `nvidia-smi` (only when the card is already awake), logind, systemd, `/etc/avelld/config.toml` |
 | `config` | The configuration: one bundle per Power profile, and its validation |
-| `engine` | One task that owns the state: every second it reads the active Power profile and applies its bundle when the profile changed or the machine resumed |
+| `policy` | Pure decisions, no I/O and no clock: the fan speed for a temperature along a curve, with hysteresis |
+| `engine` | One task that owns the state: every second it reads the active Power profile and applies its bundle when the profile changed or the machine resumed; every 2 s it writes the fan duty |
 | `status` | The machine state, read through the port |
 | `api` | The control API, `org.avell.Control1` at `/org/avell/Control1` on the system bus |
 | `client` | The one client of the API, used by `avellctl` and by the tests |
@@ -18,6 +19,7 @@
 |---|---|---|
 | `GetStatus() → s` | anyone | The whole state as JSON (see `avellctl --json status`) |
 | `SetProfile(s)` | the active local desktop user | power-saver, balanced or performance, through power-profiles-daemon; its bundle is applied at once |
+| `SetFan(s, u)` | the active local desktop user | Who runs the fans: `curve`, `fixed` (with a percentage), `max` or `automatic`. Lasts until the next call or a restart |
 | `GetConfig() → s` | anyone | The configuration in force, as TOML |
 | `SetConfig(s)` | the active local desktop user | Replaces the configuration (TOML). Invalid: refused with the reason, the previous one stays. Valid: saved and applied at once |
 
@@ -27,7 +29,8 @@ No password prompt. `dist/org.avell.Control1.conf` lets only root own the name a
 ## CLI
 
 ```
-avellctl [--json] status | profile | profile set <name> | config | config set <key> <value>
+avellctl [--json] status | profile | profile set <name> | fan | fan set <curve|automatic|max|percent>
+         | config | config set <key> <value>
 ```
 
 Every command accepts `--json`. Errors come out as `{"error": "..."}` with exit code 1. When the daemon is not running,
@@ -42,27 +45,50 @@ Each Power profile applies one bundle. power-profiles-daemon stays the single so
 hand and restart `avelld`):
 
 ```toml
+[fans]
+mode = "curve"          # who runs the fans from start: "curve" (the daemon) or "automatic" (the firmware)
+hysteresis_c = 4        # the fans slow down only once it is this much cooler than where they last sped up
+
 [profiles.power-saver]
 tgp_offset_w = 0        # TGP offset, 0 to 20 W (the firmware table's maximum)
 dynamic_boost = false   # Dynamic Boost: nvidia-powerd.service running or not
 cpu_long_term_w = 20    # CPU power limits through the kernel's power capping (intel-rapl), 5 to 120 W
 cpu_short_term_w = 30   # not below the long-term limit
+fan_curve = [[50, 20], [65, 35], [75, 50], [85, 75], [92, 100]]   # [°C, percent], see Fans
 
 [profiles.balanced]
 tgp_offset_w = 10
 dynamic_boost = true
 cpu_long_term_w = 45
 cpu_short_term_w = 65
+fan_curve = [[50, 30], [60, 40], [70, 60], [80, 80], [88, 100]]
 
 [profiles.performance]
 tgp_offset_w = 20
 dynamic_boost = true
 cpu_long_term_w = 80
 cpu_short_term_w = 80
+fan_curve = [[45, 35], [55, 50], [65, 70], [75, 90], [80, 100]]
 ```
+
+A file may leave settings out; they keep the values above.
 
 The bundle is applied again after resume. On a clean stop the daemon sets the TGP offset to 0 and the CPU limits back to
 what they were when it started.
+
+## Fans
+
+The daemon computes the fan speed (ADR-0001): the hotter of the CPU and GPU temperature, along the active profile's
+`fan_curve` (linear between points, flat before the first and after the last), with hysteresis. It writes the duty to both
+fans every 2 s, changed or not, so the driver's 5 s watchdog returns the fans to the firmware if the daemon hangs; when the
+daemon finds the fans on automatic (the watchdog fired, or the machine resumed) it takes them back. The EC moves the
+fans towards a new duty at about 1% per second (ADR-0003), and the driver forces Max fan above its hard temperatures.
+
+`avellctl fan set` hands the fans to `curve`, a fixed percentage, `max` (Max fan) or `automatic` (the firmware) until the
+next call or a restart of the daemon; `fans.mode` in the configuration decides what a start begins with. Max fan and
+automatic are set once and then left alone. Max fan turned on by someone else (the Fn key, `pwm1_enable = 0`) is left on
+until it is released. A program that drives the fans through `pwm1_enable = 1` and `pwmN` itself is overwritten within
+2 s under `curve` and `fixed`: use `automatic` for that. A clean stop leaves the fans on automatic.
 
 ## Tests
 

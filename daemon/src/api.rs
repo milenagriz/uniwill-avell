@@ -3,8 +3,7 @@
 use zbus::interface;
 use zbus::message::Header;
 
-use crate::engine::Handle;
-use crate::status;
+use crate::engine::{FanControl, Handle};
 
 pub struct Control {
     daemon: Handle,
@@ -45,7 +44,7 @@ impl Control {
 impl Control {
     /// The whole machine state, as JSON.
     async fn get_status(&self) -> zbus::fdo::Result<String> {
-        let s = status::read(self.daemon.port()).await.map_err(failed)?;
+        let s = self.daemon.status().await.map_err(failed)?;
         serde_json::to_string(&s).map_err(|e| failed(e.into()))
     }
 
@@ -59,6 +58,20 @@ impl Control {
     ) -> zbus::fdo::Result<()> {
         self.authorize(conn, &hdr).await?;
         self.daemon.set_profile(profile).await.map_err(failed)
+    }
+
+    /// Hands the fans to "curve" (the active profile's fan curve), "fixed" (`percent`, 0-100),
+    /// "max" (Max fan) or "automatic" (the firmware). Lasts until the next call or a restart.
+    async fn set_fan(
+        &self,
+        mode: &str,
+        percent: u32,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        self.authorize(conn, &hdr).await?;
+        let control = FanControl::parse(mode, percent).map_err(|e| zbus::fdo::Error::InvalidArgs(format!("{e:#}")))?;
+        self.daemon.set_fan(control).await.map_err(failed)
     }
 
     /// The configuration in force, as TOML.

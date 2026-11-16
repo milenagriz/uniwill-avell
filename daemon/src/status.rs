@@ -68,6 +68,13 @@ pub struct Temperatures {
 pub struct Fans {
     /// "max" (Max fan), "manual" or "automatic"; None when the driver does not expose fan control.
     pub mode: Option<String>,
+    /// Who runs the fans: "curve" or "fixed" (the daemon), "max" (Max fan) or "automatic" (the
+    /// firmware). None when the driver does not expose fan control.
+    #[serde(default)]
+    pub control: Option<String>,
+    /// The speed the daemon last asked for, in percent, under "curve" and "fixed".
+    #[serde(default)]
+    pub target_percent: Option<u32>,
     pub fans: Vec<Fan>,
 }
 

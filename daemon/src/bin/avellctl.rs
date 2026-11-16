@@ -9,6 +9,9 @@ commands:
   status                 the whole machine state
   profile                the active Power profile
   profile set <name>     power-saver, balanced or performance
+  fan                    who runs the fans, and their speed
+  fan set <mode>         curve (the profile's fan curve), automatic (the firmware),
+                         max (Max fan) or a fixed speed in percent, e.g. 40
   config                 the configuration in force (TOML)
   config set <key> <value>
                          change one setting, e.g. profiles.balanced.tgp_offset_w 15
@@ -19,12 +22,27 @@ fn opt<T: std::fmt::Display>(v: &Option<T>, unit: &str) -> String {
     v.as_ref().map(|v| format!("{v}{unit}")).unwrap_or_else(|| "unavailable".into())
 }
 
+fn fans_line(s: &Status) -> String {
+    let fans: Vec<String> = s.fans.fans.iter().enumerate()
+        .map(|(i, f)| format!("fan{} {} rpm ({}/255)", i + 1, f.rpm, f.duty)).collect();
+    let control = match (s.fans.control.as_deref(), s.fans.target_percent) {
+        (Some(c), Some(p)) => format!("{c} {p}%"),
+        (Some(c), None) => c.to_string(),
+        (None, _) => "unavailable".into(),
+    };
+    // the driver's own word, when it is not what the daemon asked for
+    let driver = match (s.fans.control.as_deref(), s.fans.mode.as_deref()) {
+        (Some("curve" | "fixed"), Some("manual")) | (None, None) => String::new(),
+        (Some(c), Some(m)) if c == m => String::new(),
+        (_, m) => format!(" (driver: {})", m.unwrap_or("unavailable")),
+    };
+    format!("{control}{driver}  {}", if fans.is_empty() { "unavailable".into() } else { fans.join("  ") })
+}
+
 fn print_status(s: &Status) {
     println!("Power profile    {}", s.profile);
     println!("Temperatures     CPU {}  GPU {}", opt(&s.temperatures.cpu_c, " °C"), opt(&s.temperatures.gpu_c, " °C"));
-    let fans: Vec<String> = s.fans.fans.iter().enumerate()
-        .map(|(i, f)| format!("fan{} {} rpm ({}/255)", i + 1, f.rpm, f.duty)).collect();
-    println!("Fans             {}  {}", opt(&s.fans.mode, ""), if fans.is_empty() { "unavailable".into() } else { fans.join("  ") });
+    println!("Fans             {}", fans_line(s));
     let g = &s.gpu;
     let power = match (g.power_draw_w, g.power_limit_w) {
         (Some(d), Some(l)) => format!("  {d:.1} W of {l:.0} W, {}% busy", g.utilization_percent.unwrap_or(0)),
@@ -53,6 +71,8 @@ fn explain(e: anyhow::Error) -> anyhow::Error {
         anyhow::anyhow!("avelld is not running (check: systemctl status avelld)")
     } else if let Some((_, reason)) = text.rsplit_once("invalid configuration: ") {
         anyhow::anyhow!("invalid configuration: {reason}")
+    } else if let Some((_, reason)) = text.rsplit_once("InvalidArgs: ") {
+        anyhow::anyhow!("{reason}")
     } else if text.contains("AccessDenied") {
         anyhow::anyhow!("not allowed: {}", text.rsplit(':').next().unwrap_or(&text).trim())
     } else {
@@ -89,6 +109,18 @@ async fn run(json: bool, args: &[String]) -> anyhow::Result<()> {
         ["profile", "set", name] => {
             client.set_profile(name).await.map_err(explain)?;
             if json { println!("{}", serde_json::json!({ "profile": name })) }
+        }
+        ["fan"] => {
+            let s = client.status().await.map_err(explain)?;
+            if json { println!("{}", serde_json::to_string_pretty(&s.fans)?) } else { println!("{}", fans_line(&s)) }
+        }
+        ["fan", "set", mode] => {
+            let (mode, percent) = match mode.parse::<u32>() {
+                Ok(percent) => ("fixed", percent),
+                Err(_) => (*mode, 0),
+            };
+            client.set_fan(mode, percent).await.map_err(explain)?;
+            if json { println!("{}", serde_json::to_string_pretty(&client.status().await.map_err(explain)?.fans)?) }
         }
         ["config"] => {
             let text = client.config().await.map_err(explain)?;

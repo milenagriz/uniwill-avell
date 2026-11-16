@@ -59,6 +59,7 @@ To get clangd working in an editor, generate `driver/src/compile_commands.json` 
 scripts/install.sh          # copies driver/ to /usr/src, installs with DKMS, loads it at boot, swaps the running module
 driver/checks/fans.sh       # the fan mode contract and the Cooling widget's Max button, ends on automatic
 driver/checks/direct-fan.sh # manual duties, Max fan override and the watchdog (about 1.5 min)
+driver/checks/daemon-fans.sh # avelld's fan control: curve, watchdog fallback and recovery, fixed, Max fan, automatic (about 1 min)
 ```
 
 Requires `dkms` and the headers for the running kernel (`linux-omarchy-headers`).

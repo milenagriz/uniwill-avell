@@ -379,3 +379,33 @@ the charge cap (`0x07B9`), never both. So `UNIWILL_FEATURE_BATTERY_CHARGE_MODES`
 2. Run `driver/checks/battery.sh` with the feature enabled, and set `Trickle` (stationary).
 3. Watch `BAT0/status` and `capacity` until charging stops. Record the level, then repeat with `Long_Life`.
 4. The charge cap: only if the profile behaves, try `0x07B9` the same way.
+
+## 15. Profile bundles in the daemon (#8)
+
+Observed on the device with avelld following power-profiles-daemon (`/etc/avelld/config.toml` absent, so the built-in bundles):
+
+| Step | `ctgp_offset` | RAPL long / short term | nvidia-powerd |
+|---|---|---|---|
+| Before (daemon without bundles) | 0 | 120 W / 120 W (the firmware's) | active |
+| Start, profile performance | 20 | 80 W / 80 W | active |
+| `powerprofilesctl set balanced`, 2.5 s later | 10 | 45 W / 65 W | active |
+| `avellctl profile set power-saver`, at once | 0 | 20 W / 30 W | stopping, then inactive |
+| `avellctl config set profiles.power-saver.cpu_short_term_w 35` | 0 | 20 W / 35 W | inactive |
+| `avellctl config set profiles.balanced.tgp_offset_w 25` | refused: "the firmware allows 0 to 20 W on this machine" | unchanged | |
+| `systemctl stop avelld` | 0 | 120 W / 120 W | untouched |
+
+Not yet observed on the device: re-application after a real suspend (covered by the automated test with the fake clock; the daemon
+compares boot time with monotonic time).
+
+## 16. Fan curves in the daemon (#9)
+
+`driver/checks/daemon-fans.sh` on the device, all observed: the curve holds `pwm1_enable` = 1; with avelld frozen (SIGSTOP) the kernel
+logs "no fan duty written for 5 s, returning to automatic" and the mode reads 2; after SIGCONT avelld is back at 1 within 4 s;
+`avellctl fan set 50` keeps 1, `max` gives 0 (about 5500 RPM on both fans), `automatic` gives 2; Max fan turned on from outside
+(`pwm1_enable` = 0) is kept under the curve and the curve returns once it is released; a restart starts on the curve and a clean
+stop leaves 2.
+
+The Cooling widget's own sequence (`pwm1_enable` = 1, `pwm1` = 255) cannot be told apart from the daemon's writes, because the
+driver's `pwmN` reads the EC's present duty and not the last value written. Under `curve` and `fixed` the daemon therefore
+overwrites it within 2 s; under `automatic` the widget works as before. The widget is not installed on this machine at the
+moment, so this was not observed.

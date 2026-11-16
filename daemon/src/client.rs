@@ -8,6 +8,7 @@ use crate::status::Status;
 trait Control {
     fn get_status(&self) -> zbus::Result<String>;
     fn set_profile(&self, profile: &str) -> zbus::Result<()>;
+    fn set_fan(&self, mode: &str, percent: u32) -> zbus::Result<()>;
     fn get_config(&self) -> zbus::Result<String>;
     fn set_config(&self, toml: &str) -> zbus::Result<()>;
 }
@@ -32,6 +33,11 @@ impl Client {
 
     pub async fn set_profile(&self, profile: &str) -> anyhow::Result<()> {
         Ok(self.proxy.set_profile(profile).await?)
+    }
+
+    /// Hands the fans to "curve", "fixed" (with a percentage), "max" or "automatic".
+    pub async fn set_fan(&self, mode: &str, percent: u32) -> anyhow::Result<()> {
+        Ok(self.proxy.set_fan(mode, percent).await?)
     }
 
     /// The configuration in force, as TOML.
