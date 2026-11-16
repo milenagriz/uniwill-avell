@@ -35,7 +35,7 @@ pub struct CpuLimits {
 pub struct Backlight {
     pub brightness: Option<u32>,
     pub max_brightness: Option<u32>,
-    /// Red, green, blue intensities (None on a single-colour keyboard).
+    /// Red, green, blue, each 0-255 (None on a single-colour keyboard).
     pub color: Option<[u32; 3]>,
 }
 
@@ -102,11 +102,20 @@ fn cpu(fs: &Sysfs<'_>) -> CpuLimits {
     CpuLimits { long_term_w: w(0), short_term_w: w(1) }
 }
 
+/// Three numbers from an LED file such as `multi_intensity`.
+fn triple(fs: &Sysfs<'_>, file: &str) -> Option<[u32; 3]> {
+    let v: Vec<u32> = fs.read(&format!("{KBD_LED}/{file}"))?.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    v.try_into().ok()
+}
+
+/// The most each colour channel takes on this keyboard (255 when the kernel does not say).
+fn max_intensity(fs: &Sysfs<'_>) -> [u32; 3] {
+    triple(fs, "multi_max_intensity").filter(|m| m.iter().all(|&c| c > 0)).unwrap_or([255; 3])
+}
+
 fn backlight(fs: &Sysfs<'_>) -> Backlight {
-    let color = fs.read(&format!("{KBD_LED}/multi_intensity")).and_then(|s| {
-        let v: Vec<u32> = s.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-        <[u32; 3]>::try_from(v).ok()
-    });
+    let max = max_intensity(fs);
+    let color = triple(fs, "multi_intensity").map(|raw| [0, 1, 2].map(|i| (raw[i].min(max[i]) * 255 + max[i] / 2) / max[i]));
     Backlight {
         brightness: fs.read_num(&format!("{KBD_LED}/brightness")),
         max_brightness: fs.read_num(&format!("{KBD_LED}/max_brightness")),
@@ -129,6 +138,28 @@ fn battery(fs: &Sysfs<'_>) -> Battery {
             _ => None,
         },
     }
+}
+
+fn no_backlight() -> anyhow::Error {
+    anyhow::anyhow!("the keyboard backlight is not exposed by the driver on this machine")
+}
+
+/// Sets the keyboard backlight's brightness level, from 0 (off) to the keyboard's maximum.
+pub fn set_keyboard_brightness(port: &Port, level: u32) -> anyhow::Result<()> {
+    let fs = Sysfs::new(&port.root);
+    let max: u32 = fs.read_num(&format!("{KBD_LED}/max_brightness")).ok_or_else(no_backlight)?;
+    anyhow::ensure!(level <= max, "the keyboard brightness is 0 to {max}, not {level}");
+    fs.write(&format!("{KBD_LED}/brightness"), &level.to_string())
+}
+
+/// Sets the keyboard backlight's colour (red, green, blue, each 0-255), scaled to what the
+/// keyboard takes per channel.
+pub fn set_keyboard_color(port: &Port, rgb: [u8; 3]) -> anyhow::Result<()> {
+    let fs = Sysfs::new(&port.root);
+    anyhow::ensure!(fs.exists(&format!("{KBD_LED}/multi_intensity")), no_backlight());
+    let max = max_intensity(&fs);
+    let raw = [0, 1, 2].map(|i| ((u32::from(rgb[i]) * max[i] + 127) / 255).to_string());
+    fs.write(&format!("{KBD_LED}/multi_intensity"), &raw.join(" "))
 }
 
 /// Never wakes the card: its load is only queried when the kernel already has it awake.

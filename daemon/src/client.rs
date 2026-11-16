@@ -9,6 +9,8 @@ trait Control {
     fn get_status(&self) -> zbus::Result<String>;
     fn set_profile(&self, profile: &str) -> zbus::Result<()>;
     fn set_fan(&self, mode: &str, percent: u32) -> zbus::Result<()>;
+    fn set_keyboard_brightness(&self, level: u32) -> zbus::Result<()>;
+    fn set_keyboard_color(&self, red: u8, green: u8, blue: u8) -> zbus::Result<()>;
     fn get_config(&self) -> zbus::Result<String>;
     fn set_config(&self, toml: &str) -> zbus::Result<()>;
 }
@@ -38,6 +40,16 @@ impl Client {
     /// Hands the fans to "curve", "fixed" (with a percentage), "max" or "automatic".
     pub async fn set_fan(&self, mode: &str, percent: u32) -> anyhow::Result<()> {
         Ok(self.proxy.set_fan(mode, percent).await?)
+    }
+
+    /// Sets the keyboard backlight's brightness level (0 is off).
+    pub async fn set_keyboard_brightness(&self, level: u32) -> anyhow::Result<()> {
+        Ok(self.proxy.set_keyboard_brightness(level).await?)
+    }
+
+    /// Sets the keyboard backlight's colour: red, green, blue, each 0-255.
+    pub async fn set_keyboard_color(&self, rgb: [u8; 3]) -> anyhow::Result<()> {
+        Ok(self.proxy.set_keyboard_color(rgb[0], rgb[1], rgb[2]).await?)
     }
 
     /// The configuration in force, as TOML.

@@ -20,6 +20,8 @@
 | `GetStatus() → s` | anyone | The whole state as JSON (see `avellctl --json status`) |
 | `SetProfile(s)` | the active local desktop user | power-saver, balanced or performance, through power-profiles-daemon; its bundle is applied at once |
 | `SetFan(s, u)` | the active local desktop user | Who runs the fans: `curve`, `fixed` (with a percentage), `max` or `automatic`. Lasts until the next call or a restart |
+| `SetKeyboardBrightness(u)` | the active local desktop user | The keyboard backlight's level, 0 (off) to the keyboard's maximum (4 here) |
+| `SetKeyboardColor(y, y, y)` | the active local desktop user | Red, green, blue, each 0-255, scaled to what the keyboard takes (0-50 here) |
 | `GetConfig() → s` | anyone | The configuration in force, as TOML |
 | `SetConfig(s)` | the active local desktop user | Replaces the configuration (TOML). Invalid: refused with the reason, the previous one stays. Valid: saved and applied at once |
 
@@ -30,6 +32,7 @@ No password prompt. `dist/org.avell.Control1.conf` lets only root own the name a
 
 ```
 avellctl [--json] status | profile | profile set <name> | fan | fan set <curve|automatic|max|percent>
+         | keyboard | keyboard brightness <level> | keyboard color <#rrggbb>
          | config | config set <key> <value>
 ```
 

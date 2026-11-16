@@ -12,6 +12,11 @@ commands:
   fan                    who runs the fans, and their speed
   fan set <mode>         curve (the profile's fan curve), automatic (the firmware),
                          max (Max fan) or a fixed speed in percent, e.g. 40
+  keyboard               the keyboard backlight's brightness and colour
+  keyboard brightness <level>
+                         0 (off) up to the keyboard's maximum
+  keyboard color <#rrggbb>
+                         or three numbers: red green blue, each 0-255
   config                 the configuration in force (TOML)
   config set <key> <value>
                          change one setting, e.g. profiles.balanced.tgp_offset_w 15
@@ -39,6 +44,29 @@ fn fans_line(s: &Status) -> String {
     format!("{control}{driver}  {}", if fans.is_empty() { "unavailable".into() } else { fans.join("  ") })
 }
 
+fn keyboard_line(k: &avell::status::Backlight) -> String {
+    let brightness = match (k.brightness, k.max_brightness) {
+        (Some(b), Some(m)) => format!("brightness {b}/{m}"),
+        _ => "unavailable".into(),
+    };
+    format!("{brightness}{}", k.color.map(|c| format!("  colour #{:02x}{:02x}{:02x}", c[0], c[1], c[2])).unwrap_or_default())
+}
+
+/// "#rrggbb", "rrggbb", or three numbers 0-255.
+fn parse_color(words: &[&str]) -> anyhow::Result<[u8; 3]> {
+    let bad = || anyhow::anyhow!("a colour is #rrggbb or three numbers from 0 to 255: red green blue");
+    match words {
+        [hex] => {
+            let hex = hex.trim_start_matches('#');
+            anyhow::ensure!(hex.len() == 6 && hex.is_ascii(), bad());
+            let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| bad());
+            Ok([channel(0)?, channel(2)?, channel(4)?])
+        }
+        [r, g, b] => Ok([r.parse().map_err(|_| bad())?, g.parse().map_err(|_| bad())?, b.parse().map_err(|_| bad())?]),
+        _ => Err(bad()),
+    }
+}
+
 fn print_status(s: &Status) {
     println!("Power profile    {}{}", s.profile, s.hold.as_ref().map(|why| format!("  (held: {why})")).unwrap_or_default());
     println!("Temperatures     CPU {}  GPU {}", opt(&s.temperatures.cpu_c, " °C"), opt(&s.temperatures.gpu_c, " °C"));
@@ -54,11 +82,7 @@ fn print_status(s: &Status) {
     println!("Battery          {}  {}  {}  cycles {}  health {}", opt(&b.capacity_percent, "%"), opt(&b.state, ""),
              match b.on_ac { Some(true) => "on AC", Some(false) => "on battery", None => "power source unavailable" },
              opt(&b.cycle_count, ""), opt(&b.health_percent, "%"));
-    let k = &s.backlight;
-    println!("Keyboard         {}{}", match (k.brightness, k.max_brightness) {
-        (Some(b), Some(m)) => format!("brightness {b}/{m}"),
-        _ => "unavailable".into(),
-    }, k.color.map(|c| format!("  colour {} {} {}", c[0], c[1], c[2])).unwrap_or_default());
+    println!("Keyboard         {}", keyboard_line(&s.backlight));
     if !s.unavailable.is_empty() {
         println!("Unavailable      {} (not exposed by the driver on this machine)", s.unavailable.join(", "));
     }
@@ -72,6 +96,8 @@ fn explain(e: anyhow::Error) -> anyhow::Error {
     } else if let Some((_, reason)) = text.rsplit_once("invalid configuration: ") {
         anyhow::anyhow!("invalid configuration: {reason}")
     } else if let Some((_, reason)) = text.rsplit_once("InvalidArgs: ") {
+        anyhow::anyhow!("{reason}")
+    } else if let Some((_, reason)) = text.rsplit_once("org.freedesktop.DBus.Error.Failed: ") {
         anyhow::anyhow!("{reason}")
     } else if text.contains("AccessDenied") {
         anyhow::anyhow!("not allowed: {}", text.rsplit(':').next().unwrap_or(&text).trim())
@@ -121,6 +147,19 @@ async fn run(json: bool, args: &[String]) -> anyhow::Result<()> {
             };
             client.set_fan(mode, percent).await.map_err(explain)?;
             if json { println!("{}", serde_json::to_string_pretty(&client.status().await.map_err(explain)?.fans)?) }
+        }
+        ["keyboard"] => {
+            let k = client.status().await.map_err(explain)?.backlight;
+            if json { println!("{}", serde_json::to_string_pretty(&k)?) } else { println!("{}", keyboard_line(&k)) }
+        }
+        ["keyboard", "brightness", level] => {
+            let level = level.parse().map_err(|_| anyhow::anyhow!("the brightness is a number, not {level:?}"))?;
+            client.set_keyboard_brightness(level).await.map_err(explain)?;
+            if json { println!("{}", serde_json::to_string_pretty(&client.status().await.map_err(explain)?.backlight)?) }
+        }
+        ["keyboard", "color" | "colour", color @ ..] => {
+            client.set_keyboard_color(parse_color(color)?).await.map_err(explain)?;
+            if json { println!("{}", serde_json::to_string_pretty(&client.status().await.map_err(explain)?.backlight)?) }
         }
         ["config"] => {
             let text = client.config().await.map_err(explain)?;

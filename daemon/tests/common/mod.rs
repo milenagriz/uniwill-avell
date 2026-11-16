@@ -268,7 +268,8 @@ pub fn laptop_files() -> BTreeMap<&'static str, String> {
         f.insert(Box::leak(format!("{BAT}/{k}").into_boxed_str()), v.into());
     }
     f.insert(Box::leak(format!("{AC}/online").into_boxed_str()), "1".into());
-    for (k, v) in [("brightness", "1"), ("max_brightness", "4"), ("multi_intensity", "0 50 50"), ("multi_index", "red green blue")] {
+    for (k, v) in [("brightness", "1"), ("max_brightness", "4"), ("multi_intensity", "0 50 50"), ("multi_index", "red green blue"),
+                   ("multi_max_intensity", "50 50 50")] {
         f.insert(Box::leak(format!("{KBD}/{k}").into_boxed_str()), v.into());
     }
     f.insert(Box::leak(format!("{RAPL}/constraint_0_power_limit_uw").into_boxed_str()), "120000000".into());

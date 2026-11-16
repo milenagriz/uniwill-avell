@@ -103,7 +103,7 @@ async fn status_shows_cpu_power_limits_and_keyboard_backlight() {
     assert_eq!(status.cpu.short_term_w, Some(65));
     assert_eq!(status.backlight.brightness, Some(3));
     assert_eq!(status.backlight.max_brightness, Some(4));
-    assert_eq!(status.backlight.color, Some([0, 50, 50]));
+    assert_eq!(status.backlight.color, Some([0, 255, 255])); // 0 50 50 of 50, as 0-255
 }
 
 #[tokio::test]

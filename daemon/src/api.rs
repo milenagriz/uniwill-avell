@@ -74,6 +74,30 @@ impl Control {
         self.daemon.set_fan(control).await.map_err(failed)
     }
 
+    /// Sets the keyboard backlight's brightness level, from 0 (off) to the keyboard's maximum.
+    async fn set_keyboard_brightness(
+        &self,
+        level: u32,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        self.authorize(conn, &hdr).await?;
+        crate::status::set_keyboard_brightness(self.daemon.port(), level).map_err(failed)
+    }
+
+    /// Sets the keyboard backlight's colour: red, green, blue, each 0-255.
+    async fn set_keyboard_color(
+        &self,
+        red: u8,
+        green: u8,
+        blue: u8,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        self.authorize(conn, &hdr).await?;
+        crate::status::set_keyboard_color(self.daemon.port(), [red, green, blue]).map_err(failed)
+    }
+
     /// The configuration in force, as TOML.
     async fn get_config(&self) -> zbus::fdo::Result<String> {
         self.daemon.config().await.map_err(failed)
