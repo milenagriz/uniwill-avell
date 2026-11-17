@@ -1,7 +1,8 @@
 [Unit]
 Description=Avell A52 MOB control daemon
 Documentation=https://github.com/milenagriz5-dotcom/uniwill-avell
-After=power-profiles-daemon.service
+# No After= on power-profiles-daemon: it orders itself after multi-user.target, so ordering avelld
+# (WantedBy=multi-user.target) after it is a cycle. avelld reaches it on each call, so a late start is fine.
 Wants=power-profiles-daemon.service
 
 [Service]
