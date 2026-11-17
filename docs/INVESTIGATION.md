@@ -148,6 +148,10 @@ EC state resets on a full power-off, which is the rollback for any EC write (inf
 | More than 17,000 package throttle events in one boot | observed |
 | The cooler is saturated, so any power raise will be limited by temperature until the repaste | inferred |
 | EC fan duty under that load: `0x075B/0x075C` = `c8 c8` (200 of 200, full) | observed (`ec_load.bin`) |
+| **After the owner's repaste** (2026-11-17, on AC, `performance`, graphics card asleep, `evidence/scripts/cpuload.sh 150`): 94 °C at the first sample (2 s); 47.4 W over 0-30 s, 43.8 W over 30-90 s, 42.7 W over 90-150 s at 94 °C and about 3.77 GHz; both fans at full speed (about 5600 / 5400 RPM); 19,391 package throttle events in 150 s | observed |
+| The same run with the graphics card awake (about 7 W idle) gave the same figures (55 W falling to 42-44 W) | observed |
+| The repaste did not measurably raise the sustained power: the cooler is still the limit. Only the summary of the pre-repaste run survives (its length is unknown), so "about 49 W" may cover a shorter window; a retest after some heat cycles is worth doing | inferred |
+| On battery the CPU is held at about 18 W and 2.5 GHz (61-63 °C, no throttling), so load runs on battery say nothing about the cooler | observed |
 
 ### 7.5 CPU power limits and undervolting
 
@@ -380,6 +384,12 @@ the charge cap (`0x07B9`), never both. So `UNIWILL_FEATURE_BATTERY_CHARGE_MODES`
 3. Watch `BAT0/status` and `capacity` until charging stops. Record the level, then repeat with `Long_Life`.
 4. The charge cap: only if the profile behaves, try `0x07B9` the same way.
 
+**Discharge test, first run (2026-11-17, in progress).** A test build of the driver with `UNIWILL_FEATURE_BATTERY_CHARGE_MODES` on
+(not installed; `insmod` over the DKMS module) gave `BAT0/charge_types`. Charger plugged in at 76%, `Trickle` set at 77%: EC `0x07A6` read
+`0x20` (bits 4-5 = 10, as expected). The battery kept charging: 77% → 89% in 18 min, the current falling from 1.8 A to 0.7 A, the same taper
+as a normal charge. So `Trickle` does not stop at 80%: either its level is near 90% or higher, or the EC ignores the bits (unknown yet). The log
+goes on in `~/.cache/uniwill-avell-handover/chgtest/trickle.log`; `Long_Life` is not tried yet.
+
 ## 15. Profile bundles in the daemon (#8)
 
 Observed on the device with avelld following power-profiles-daemon (`/etc/avelld/config.toml` absent, so the built-in bundles):
@@ -435,6 +445,12 @@ when the target reaches 100% the driver turns Max fan on at once, after which th
 The built-in performance curve reached 100% at 80 °C, which a compile already triggered. Owner decision (2026-11-15): the
 curve now reaches 100% at 90 °C (`[[45, 35], [55, 50], [65, 65], [80, 85], [90, 100]]`) and the daemon averages the CPU temperature over its last
 3 readings (6 s), so a single-reading spike moves the target by a third of its size.
+
+**The daemon keeps the graphics card awake** (observed 2026-11-17). With nothing but Hyprland and `nvidia-powerd` holding `/dev/nvidia*`,
+the card stayed `active` for minutes. With avelld paused (SIGSTOP) it was `suspending` after 6 s and `suspended` after 8 s, and stayed asleep
+after avelld resumed. So the 2 s `nvidia-smi` sample, taken only while the card is awake, is itself what keeps it awake: once anything wakes the
+card, avelld holds it awake for good, about 7 W on battery. This is likely the "graphics card awake 34% of the time" of
+`docs/research/idle-power-settings.md`.
 
 ## 18. BIOS: memory and NVMe settings (owner question, read only)
 
