@@ -19,3 +19,15 @@ _Avoid_: cTGP, GPU boost, boost
 **Dynamic Boost**:
 NVIDIA's feature that moves spare power budget from the processor to the graphics card while both are under load.
 _Avoid_: Boost, DB
+
+**Boot-time setting change**:
+A change to a stored BIOS setting made before the operating system starts, leaving the firmware's code untouched.
+_Avoid_: NVRAM hack, setup_var tweak, BIOS mod
+
+**Modified image**:
+A copy of this machine's own flash backup with only intended edits, written back to the flash by the owner.
+_Avoid_: Modded BIOS, custom BIOS, unlocked BIOS
+
+**Sibling board**:
+Another vendor's laptop built on the same Tongfang mainboard and BIOS base as this one, whose firmware is reference material only.
+_Avoid_: Clone, rebrand, same model
