@@ -144,3 +144,6 @@ a temporary directory laid out like this laptop's `/sys`, plus fake power-profil
 (`tests/common/mod.rs`). No real hardware is touched.
 
 Installed by `scripts/install.sh` (builds release, installs `/usr/local/bin/avelld`, `/usr/local/bin/avellctl`, the service and the D-Bus policy).
+It also takes `rapl_controller` out of thermald's CPU cooling order (`/etc/thermald/thermal-cpu-cdev-order.xml`, kept so by the
+pacman hook `dist/avelld-thermald.hook`): otherwise thermald lowers the CPU long-term limit at 95 °C and afterwards puts back its own
+boot-time value (120 W), replacing the bundle's. thermald still writes that boot-time value back when it stops.

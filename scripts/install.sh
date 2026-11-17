@@ -50,6 +50,17 @@ sudo install -m 755 "$REPO/daemon/target/release/avelld" "$REPO/daemon/target/re
 sudo install -m 644 "$REPO/daemon/dist/org.avell.Control1.conf" /usr/share/dbus-1/system.d/
 sudo install -m 644 "$REPO/daemon/dist/avelld.service" /etc/systemd/system/
 sudo systemctl daemon-reload
+# thermald (Omarchy turns it on for Intel laptops) cools the CPU first by lowering the long-term power
+# limit, then puts back its own boot-time value: leave that limit to avelld. The hook repeats this after
+# thermald updates, which overwrite the file.
+cdev_order=/etc/thermald/thermal-cpu-cdev-order.xml
+if [ -f "$cdev_order" ]; then
+  sudo install -Dm 644 "$REPO/daemon/dist/avelld-thermald.hook" /etc/pacman.d/hooks/avelld-thermald.hook
+  if grep -q rapl_controller "$cdev_order"; then
+    sudo sed -i /rapl_controller/d "$cdev_order"
+    sudo systemctl try-restart thermald.service
+  fi
+fi
 sudo systemctl enable avelld.service
 sudo systemctl restart avelld.service
 echo "avelld $(systemctl is-active avelld.service), avellctl in /usr/local/bin"

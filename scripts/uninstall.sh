@@ -22,6 +22,14 @@ sudo rm -f /etc/systemd/system/avelld.service /usr/share/dbus-1/system.d/org.ave
 sudo rm -rf /etc/avelld
 sudo systemctl daemon-reload
 
+# thermald gets the CPU power limit back
+sudo rm -f /etc/pacman.d/hooks/avelld-thermald.hook
+cdev_order=/etc/thermald/thermal-cpu-cdev-order.xml
+if [ -f "$cdev_order" ] && ! grep -q rapl_controller "$cdev_order"; then
+  sudo sed -i '0,/<CoolingDevice>/s||<CoolingDevice>rapl_controller</CoolingDevice>\n\t&|' "$cdev_order"
+  sudo systemctl try-restart thermald.service
+fi
+
 # Fans back to automatic before the driver goes away (the driver also does this on unload)
 for h in /sys/class/hwmon/hwmon*; do
   [ "$(cat "$h/name" 2>/dev/null)" = uniwill ] && [ -w "$h/pwm1_enable" ] && echo 2 | sudo tee "$h/pwm1_enable" >/dev/null || true

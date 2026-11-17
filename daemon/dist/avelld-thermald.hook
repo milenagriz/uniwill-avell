@@ -1,0 +1,12 @@
+# thermald's package overwrites its cooling order on every update: take rapl_controller out again,
+# so thermald never sets the CPU long-term power limit that avelld sets per Power profile.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = thermald
+
+[Action]
+Description = Leaving the CPU power limit to avelld (thermald without rapl_controller)
+When = PostTransaction
+Exec = /usr/bin/sed -i /rapl_controller/d /etc/thermald/thermal-cpu-cdev-order.xml
